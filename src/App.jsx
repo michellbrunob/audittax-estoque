@@ -23,7 +23,11 @@ const downloadDataUrl = (dataUrl, fileName) => {
   link.remove();
 };
 const TO_NFCE_CONSULT_URL = 'https://www.sefaz.to.gov.br/nfce/consulta.jsf';
-const NFCE_EXTRACT_API_URL = 'http://localhost:3333/nfce/upload';
+const DEFAULT_NFCE_API_BASE_URL = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+  ? 'http://127.0.0.1:3333'
+  : '';
+const NFCE_API_BASE_URL = (import.meta.env.VITE_NFCE_API_URL || DEFAULT_NFCE_API_BASE_URL || '').replace(/\/$/, '');
+const NFCE_EXTRACT_API_URL = NFCE_API_BASE_URL ? (NFCE_API_BASE_URL + '/nfce/upload') : '';
 const openToNfcePortalWithKey = (accessKey) => {
   const key = extractAccessKey(accessKey);
   if (!key) return false;
@@ -43,6 +47,9 @@ const openToNfcePortalWithKey = (accessKey) => {
 };
 
 const detectAccessKeyWithBackend = async (file) => {
+  if (!NFCE_EXTRACT_API_URL) {
+    throw new Error('Backend NFC-e nao configurado neste ambiente.');
+  }
   const formData = new FormData();
   formData.append('file', file);
   const response = await fetch(NFCE_EXTRACT_API_URL, { method: 'POST', body: formData });
@@ -829,6 +836,7 @@ function AlertCard({ tone, title, text }) { return <article className={`alert-ca
 function EmptyState({ text }) { return <div className="empty-state">{text}</div>; }
 
 export default App;
+
 
 
 
