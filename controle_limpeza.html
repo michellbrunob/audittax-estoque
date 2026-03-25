@@ -1,0 +1,1517 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Controle de Limpeza</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #f5f4f1;
+    --surface: #ffffff;
+    --surface2: #f0ede8;
+    --border: rgba(0,0,0,0.09);
+    --border2: rgba(0,0,0,0.15);
+    --text: #1a1916;
+    --text2: #6b6860;
+    --text3: #a09e98;
+    --green: #2d7a4f;
+    --green-bg: #eaf5ee;
+    --green-border: #b8dfc8;
+    --amber: #8a5c00;
+    --amber-bg: #fef3dc;
+    --amber-border: #f5d98a;
+    --red: #b33030;
+    --red-bg: #fdeaea;
+    --red-border: #f5b8b8;
+    --blue: #1a5fa8;
+    --blue-bg: #e8f0fb;
+    --blue-border: #b8d0f5;
+    --accent: #1a1916;
+    --radius: 10px;
+    --radius-sm: 6px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  /* Layout */
+  .app { display: flex; min-height: 100vh; }
+
+  /* Sidebar */
+  .sidebar {
+    width: 220px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    z-index: 100;
+  }
+  .sidebar-logo {
+    padding: 20px 18px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .logo-mark {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text3);
+    margin-bottom: 4px;
+  }
+  .logo-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.2;
+  }
+  .sidebar-nav { flex: 1; padding: 10px 10px; overflow-y: auto; }
+  .nav-section { margin-bottom: 20px; }
+  .nav-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text3);
+    padding: 0 8px;
+    margin-bottom: 4px;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text2);
+    transition: all .12s;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    position: relative;
+  }
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+  .nav-item.active { background: var(--text); color: #fff; }
+  .nav-item .ico { font-size: 15px; flex-shrink: 0; }
+  .nav-badge {
+    margin-left: auto;
+    background: var(--red);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 20px;
+    min-width: 18px;
+    text-align: center;
+  }
+  .nav-badge.warn { background: var(--amber); }
+  .nav-badge.info { background: var(--blue); }
+
+  .sidebar-footer {
+    padding: 14px 18px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text3);
+  }
+
+  /* Main */
+  .main { margin-left: 220px; flex: 1; padding: 28px 32px; max-width: 1100px; }
+
+  /* Topbar */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  .page-title { font-size: 20px; font-weight: 600; }
+  .page-sub { font-size: 13px; color: var(--text2); margin-top: 2px; }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow);
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-bottom: 14px;
+  }
+
+  /* Metrics */
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 12px; margin-bottom: 14px; }
+  .metric {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    box-shadow: var(--shadow);
+  }
+  .metric-label { font-size: 11px; color: var(--text3); font-weight: 500; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+  .metric-value { font-size: 28px; font-weight: 500; line-height: 1; font-family: 'DM Mono', monospace; }
+  .metric-sub { font-size: 11px; color: var(--text3); margin-top: 4px; }
+  .mv-green { color: var(--green); }
+  .mv-amber { color: var(--amber); }
+  .mv-red { color: var(--red); }
+
+  /* Table */
+  .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .tbl th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    padding: 0 10px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tbl td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .tbl tr:last-child td { border-bottom: none; }
+  .tbl tbody tr:hover td { background: var(--surface2); }
+
+  /* Badges */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .b-ok { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+  .b-warn { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber-border); }
+  .b-red { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
+  .b-info { background: var(--blue-bg); color: var(--blue); border: 1px solid var(--blue-border); }
+  .b-neu { background: var(--surface2); color: var(--text2); border: 1px solid var(--border2); }
+
+  /* Buttons */
+  .btn {
+    padding: 8px 16px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border2);
+    background: var(--surface);
+    cursor: pointer;
+    font-size: 13px;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 500;
+    color: var(--text);
+    transition: all .12s;
+  }
+  .btn:hover { background: var(--surface2); }
+  .btn-dark { background: var(--text); color: #fff; border-color: var(--text); }
+  .btn-dark:hover { opacity: .85; }
+  .btn-green { background: var(--green-bg); color: var(--green); border-color: var(--green-border); }
+  .btn-green:hover { background: var(--green-border); }
+  .btn-amber { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-border); }
+  .btn-red { background: var(--red-bg); color: var(--red); border-color: var(--red-border); }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+
+  /* Forms */
+  .form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 14px; }
+  .fg { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 120px; }
+  .fg label { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; }
+  .fg input, .fg select, .fg textarea {
+    padding: 8px 11px;
+    border: 1px solid var(--border2);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    font-family: 'DM Sans', sans-serif;
+    transition: border-color .12s;
+  }
+  .fg input:focus, .fg select:focus, .fg textarea:focus {
+    outline: none;
+    border-color: var(--text);
+  }
+
+  /* Alert banners */
+  .alert { border-radius: var(--radius-sm); padding: 11px 14px; font-size: 13px; margin-bottom: 12px; display: flex; gap: 10px; align-items: flex-start; border: 1px solid; }
+  .alert-red { background: var(--red-bg); color: var(--red); border-color: var(--red-border); }
+  .alert-amber { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-border); }
+  .alert-green { background: var(--green-bg); color: var(--green); border-color: var(--green-border); }
+  .alert-blue { background: var(--blue-bg); color: var(--blue); border-color: var(--blue-border); }
+
+  /* Ciclo banner */
+  .ciclo-card {
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    border: 1px solid;
+    box-shadow: var(--shadow);
+  }
+  .ciclo-safe { background: var(--green-bg); border-color: var(--green-border); }
+  .ciclo-warn { background: var(--amber-bg); border-color: var(--amber-border); }
+  .ciclo-danger { background: var(--red-bg); border-color: var(--red-border); }
+  .ciclo-days { font-size: 42px; font-weight: 600; font-family: 'DM Mono', monospace; line-height: 1; }
+  .ciclo-safe .ciclo-days { color: var(--green); }
+  .ciclo-warn .ciclo-days { color: var(--amber); }
+  .ciclo-danger .ciclo-days { color: var(--red); }
+  .ciclo-info { flex: 1; min-width: 180px; }
+  .ciclo-title { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
+  .ciclo-sub { font-size: 12px; color: var(--text2); }
+  .prog-wrap { background: rgba(0,0,0,.1); border-radius: 20px; height: 6px; margin: 10px 0 4px; overflow: hidden; }
+  .prog-bar { height: 100%; border-radius: 20px; }
+  .prog-green { background: var(--green); }
+  .prog-amber { background: var(--amber); }
+  .prog-red { background: var(--red); }
+
+  /* Dur bar */
+  .dur-wrap { background: var(--surface2); border-radius: 20px; height: 5px; overflow: hidden; margin: 5px 0; }
+  .dur-bar { height: 100%; border-radius: 20px; }
+  .dur-g { background: var(--green); }
+  .dur-y { background: var(--amber); }
+  .dur-r { background: var(--red); }
+
+  /* Timeline */
+  .tl { position: relative; padding-left: 26px; }
+  .tl-line { position: absolute; left: 8px; top: 10px; bottom: 10px; width: 1.5px; background: var(--border2); }
+  .tl-item { position: relative; margin-bottom: 20px; }
+  .tl-dot { position: absolute; left: -22px; top: 3px; width: 14px; height: 14px; border-radius: 50%; border: 2px solid; flex-shrink: 0; }
+  .td-ok { background: var(--green-bg); border-color: var(--green); }
+  .td-warn { background: var(--amber-bg); border-color: var(--amber); }
+  .td-danger { background: var(--red-bg); border-color: var(--red); }
+  .td-blue { background: var(--blue-bg); border-color: var(--blue); }
+  .td-today { background: var(--text); border-color: var(--text); }
+  .td-compra { background: var(--surface2); border-color: var(--border2); }
+  .tl-date { font-size: 11px; color: var(--text3); margin-bottom: 2px; font-family: 'DM Mono', monospace; }
+  .tl-title { font-size: 13px; font-weight: 600; }
+  .tl-sub { font-size: 12px; color: var(--text2); margin-top: 3px; }
+
+  /* History */
+  .hist-item { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+  .hist-item:last-child { border-bottom: none; }
+  .hist-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .hd-in { background: var(--green); }
+  .hd-out { background: var(--amber); }
+  .hd-av { background: var(--blue); }
+  .hist-txt { flex: 1; font-size: 13px; }
+  .hist-date { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; }
+
+  /* Avulso */
+  .av-card { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 8px; display: flex; gap: 12px; }
+  .av-icon { width: 36px; height: 36px; border-radius: var(--radius-sm); background: var(--blue-bg); display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; border: 1px solid var(--blue-border); }
+  .av-body { flex: 1; }
+  .av-title { font-weight: 600; font-size: 13px; }
+  .av-sub { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  .av-meta { font-size: 11px; color: var(--text3); margin-top: 5px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .cost-tag { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .ct-ok { background: var(--green-bg); color: var(--green); }
+  .ct-warn { background: var(--amber-bg); color: var(--amber); }
+
+  /* Drop zone */
+  .drop-zone {
+    border: 2px dashed var(--border2);
+    border-radius: var(--radius);
+    padding: 32px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+    position: relative;
+  }
+  .drop-zone:hover, .drop-zone.drag { border-color: var(--text); background: var(--surface2); }
+  .drop-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .drop-icon { font-size: 28px; margin-bottom: 10px; }
+  .drop-txt { font-size: 13px; color: var(--text2); font-weight: 500; }
+  .drop-sub { font-size: 12px; color: var(--text3); margin-top: 4px; }
+
+  /* Spin */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { width: 16px; height: 16px; border: 2px solid var(--border2); border-top-color: var(--text); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
+
+  /* Price chips */
+  .price-chip { font-size: 12px; padding: 3px 10px; border-radius: 20px; background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+  .price-chip.best { background: var(--green-bg); color: var(--green); border-color: var(--green-border); }
+
+  /* Lock */
+  .lock-wrap { text-align: center; padding: 40px 20px; }
+  .lock-ico { font-size: 36px; opacity: .4; margin-bottom: 14px; }
+
+  /* Price item */
+  .price-row-item { padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .price-row-item:last-child { border-bottom: none; }
+  .price-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+
+  /* Section header */
+  .sec-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .sec-hdr h3 { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; }
+
+  /* Comp card */
+  .comp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px,1fr)); gap: 10px; }
+  .comp-card { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; cursor: pointer; transition: border-color .15s, background .15s; }
+  .comp-card:hover { border-color: var(--text); background: var(--surface2); }
+  .comp-ico { font-size: 22px; margin-bottom: 8px; }
+  .comp-title { font-weight: 600; font-size: 13px; }
+  .comp-sub { font-size: 12px; color: var(--text2); margin-top: 3px; }
+
+  .empty { padding: 28px; text-align: center; font-size: 13px; color: var(--text3); }
+
+  /* Success msg */
+  .success-msg { font-size: 12px; color: var(--green); min-height: 18px; margin-top: 8px; }
+  .error-msg { font-size: 12px; color: var(--red); min-height: 18px; }
+
+  /* Mono */
+  .mono { font-family: 'DM Mono', monospace; }
+
+  /* Screen hide/show */
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  /* Separator */
+  hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+  /* comp prices row */
+  .chips-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+
+  @media (max-width: 700px) {
+    .sidebar { width: 100%; height: auto; position: relative; flex-direction: row; }
+    .main { margin-left: 0; padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark">Escritório</div>
+    <div class="logo-name">Controle de<br>Limpeza</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section">
+      <div class="nav-label">Visão geral</div>
+      <button class="nav-item active" onclick="goScreen('dashboard')">
+        <span class="ico">◼</span> Dashboard
+        <span class="nav-badge warn" id="badge-alerta" style="display:none">0</span>
+      </button>
+      <button class="nav-item" onclick="goScreen('ciclo')">
+        <span class="ico">○</span> Ciclo de Compras
+      </button>
+      <button class="nav-item" onclick="goScreen('timeline')">
+        <span class="ico">—</span> Linha do Tempo
+      </button>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Estoque</div>
+      <button class="nav-item" onclick="goScreen('estoque')">
+        <span class="ico">▦</span> Itens
+      </button>
+      <button class="nav-item" onclick="goScreen('entrada')">
+        <span class="ico">↓</span> Entrada
+      </button>
+      <button class="nav-item" onclick="goScreen('saida')">
+        <span class="ico">↑</span> Saída
+      </button>
+      <button class="nav-item" onclick="goScreen('avulsas')">
+        <span class="ico">⚡</span> Reposição Avulsa
+      </button>
+      <button class="nav-item" onclick="goScreen('historico')">
+        <span class="ico">≡</span> Histórico
+      </button>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Análise</div>
+      <button class="nav-item" onclick="goScreen('leitor')">
+        <span class="ico">◈</span> Leitor de NF
+      </button>
+      <button class="nav-item" onclick="goScreen('precos')">
+        <span class="ico">◇</span> Preços
+      </button>
+      <button class="nav-item" onclick="goScreen('duracao')">
+        <span class="ico">◷</span> Duração
+      </button>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Administração</div>
+      <button class="nav-item" onclick="goScreen('comprovantes')">
+        <span class="ico">🔒</span> Comprovantes
+      </button>
+      <button class="nav-item" onclick="goScreen('config')">
+        <span class="ico">◎</span> Configurações
+      </button>
+    </div>
+  </nav>
+  <div class="sidebar-footer">v1.0 · <span id="sf-date"></span></div>
+</aside>
+
+<!-- MAIN -->
+<main class="main">
+
+<!-- ===== DASHBOARD ===== -->
+<div id="s-dashboard" class="screen active">
+  <div class="topbar">
+    <div><div class="page-title">Dashboard</div><div class="page-sub" id="dash-sub"></div></div>
+    <button class="btn btn-dark btn-sm" onclick="goScreen('entrada')">+ Registrar entrada</button>
+  </div>
+  <div id="dash-alerts"></div>
+  <div class="metrics" id="dash-metrics"></div>
+  <div class="card">
+    <div class="card-title">Situação do estoque</div>
+    <table class="tbl">
+      <thead><tr><th>Item</th><th>Estoque atual</th><th>Mínimo</th><th>Dura até</th><th>Status</th></tr></thead>
+      <tbody id="dash-body"></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="card-title">Últimas movimentações</div>
+    <div id="dash-hist"></div>
+  </div>
+</div>
+
+<!-- ===== CICLO ===== -->
+<div id="s-ciclo" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Ciclo de Compras</div><div class="page-sub">Controle do ciclo de 60 dias</div></div>
+    <button class="btn btn-sm" onclick="goScreen('config')">Editar ciclo</button>
+  </div>
+  <div id="ciclo-banner"></div>
+  <div id="ciclo-alerts"></div>
+  <div class="card">
+    <div class="card-title">Itens vs próxima compra</div>
+    <table class="tbl">
+      <thead><tr><th>Item</th><th>Estoque</th><th>Esgota em</th><th>Dias restantes</th><th>Situação</th><th></th></tr></thead>
+      <tbody id="ciclo-body"></tbody>
+    </table>
+  </div>
+  <div class="card" id="ciclo-extra-card">
+    <div class="card-title">Custo extra — reposições avulsas neste ciclo</div>
+    <div id="ciclo-extra"></div>
+  </div>
+</div>
+
+<!-- ===== TIMELINE ===== -->
+<div id="s-timeline" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Linha do Tempo</div><div class="page-sub">O que acontece antes da próxima compra</div></div>
+  </div>
+  <div class="card">
+    <div class="tl" id="tl-content">
+      <div class="tl-line"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== ESTOQUE ===== -->
+<div id="s-estoque" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Itens</div><div class="page-sub">Produtos cadastrados no sistema</div></div>
+    <button class="btn btn-dark btn-sm" onclick="goScreen('cadastro-item')">+ Novo item</button>
+  </div>
+  <div class="card">
+    <table class="tbl">
+      <thead><tr><th>Nome</th><th>Unidade</th><th>Qtd. atual</th><th>Estoque mínimo</th><th>Consumo/sem</th><th>Status</th><th></th></tr></thead>
+      <tbody id="est-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== CADASTRO ITEM ===== -->
+<div id="s-cadastro-item" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Novo item</div></div>
+    <button class="btn btn-sm" onclick="goScreen('estoque')">← Voltar</button>
+  </div>
+  <div class="card">
+    <div class="form-row">
+      <div class="fg"><label>Nome do item</label><input id="ci-nome" type="text" placeholder="Ex: Detergente"></div>
+      <div class="fg"><label>Unidade</label>
+        <select id="ci-un"><option>un</option><option>L</option><option>kg</option><option>cx</option><option>pct</option></select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="fg"><label>Qtd. inicial</label><input id="ci-qtd" type="number" min="0" value="0"></div>
+      <div class="fg"><label>Estoque mínimo</label><input id="ci-min" type="number" min="0" value="2"></div>
+      <div class="fg"><label>Consumo por semana</label><input id="ci-cons" type="number" min="0" step="0.1" value="1"></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-dark" onclick="cadastrarItem()">Salvar item</button>
+      <button class="btn" onclick="goScreen('estoque')">Cancelar</button>
+    </div>
+    <p class="success-msg" id="ci-msg"></p>
+  </div>
+</div>
+
+<!-- ===== ENTRADA ===== -->
+<div id="s-entrada" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Registrar Entrada</div><div class="page-sub">Produto que chegou ao estoque</div></div>
+  </div>
+  <div class="card">
+    <div class="form-row">
+      <div class="fg"><label>Item</label><select id="ent-item"></select></div>
+      <div class="fg"><label>Quantidade</label><input id="ent-qtd" type="number" min="1" value="1"></div>
+      <div class="fg"><label>Data</label><input id="ent-data" type="date"></div>
+    </div>
+    <div class="form-row">
+      <div class="fg" style="flex:2"><label>Observação</label><input id="ent-obs" type="text" placeholder="Ex: Compra mensal – NF 1234"></div>
+    </div>
+    <button class="btn btn-dark" onclick="registrarEntrada()">Confirmar entrada</button>
+    <p class="success-msg" id="ent-msg"></p>
+  </div>
+</div>
+
+<!-- ===== SAÍDA ===== -->
+<div id="s-saida" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Registrar Saída</div><div class="page-sub">Produto retirado do estoque</div></div>
+  </div>
+  <div class="card">
+    <div class="form-row">
+      <div class="fg"><label>Item</label><select id="sai-item"></select></div>
+      <div class="fg"><label>Quantidade</label><input id="sai-qtd" type="number" min="1" value="1"></div>
+      <div class="fg"><label>Data</label><input id="sai-data" type="date"></div>
+    </div>
+    <div class="form-row">
+      <div class="fg" style="flex:2"><label>Motivo</label><input id="sai-obs" type="text" placeholder="Ex: Uso semanal – banheiros"></div>
+    </div>
+    <button class="btn btn-dark" onclick="registrarSaida()">Confirmar saída</button>
+    <p class="success-msg" id="sai-msg"></p>
+    <p class="error-msg" id="sai-err"></p>
+  </div>
+</div>
+
+<!-- ===== REPOSIÇÃO AVULSA ===== -->
+<div id="s-avulsas" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Reposição Avulsa</div><div class="page-sub">Compra fora do ciclo programado</div></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Registrar reposição avulsa</div>
+    <div class="form-row">
+      <div class="fg"><label>Item</label><select id="av-item"></select></div>
+      <div class="fg"><label>Quantidade</label><input id="av-qtd" type="number" min="1" value="1"></div>
+      <div class="fg"><label>Data</label><input id="av-data" type="date"></div>
+      <div class="fg"><label>Custo (R$)</label><input id="av-custo" type="number" step="0.01" placeholder="0,00"></div>
+    </div>
+    <div class="form-row">
+      <div class="fg" style="flex:2"><label>Motivo</label><input id="av-motivo" type="text" placeholder="Ex: Vazamento consumiu mais rápido"></div>
+      <div class="fg"><label>Local de compra</label><input id="av-local" type="text" placeholder="Ex: Mercadinho da esquina"></div>
+    </div>
+    <button class="btn btn-dark" onclick="registrarAvulsa()">Registrar</button>
+    <p class="success-msg" id="av-msg"></p>
+  </div>
+  <div class="card">
+    <div class="sec-hdr">
+      <h3>Histórico de reposições avulsas</h3>
+      <select id="av-filtro" onchange="renderAvulsas()" style="font-size:12px;padding:5px 8px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--surface);color:var(--text)">
+        <option value="atual">Ciclo atual</option>
+        <option value="todos">Todos os ciclos</option>
+      </select>
+    </div>
+    <div id="av-list"></div>
+  </div>
+</div>
+
+<!-- ===== HISTÓRICO ===== -->
+<div id="s-historico" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Histórico</div><div class="page-sub">Todas as movimentações</div></div>
+  </div>
+  <div class="card">
+    <div class="sec-hdr">
+      <h3>Movimentações</h3>
+      <select id="hist-filtro" onchange="renderHistorico()" style="font-size:12px;padding:5px 8px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--surface);color:var(--text)">
+        <option value="">Todos os itens</option>
+      </select>
+    </div>
+    <div id="hist-list"></div>
+  </div>
+</div>
+
+<!-- ===== LEITOR NF ===== -->
+<div id="s-leitor" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Leitor de NF</div><div class="page-sub">A IA lê o comprovante e extrai os itens automaticamente</div></div>
+  </div>
+
+  <!-- Bloco de chave API -->
+  <div class="card" id="nf-chave-card">
+    <div class="card-title">Chave de API</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:12px">
+      Necessária para a IA ler os comprovantes. A chave fica <b>apenas no seu navegador</b>, nunca é enviada a nenhum servidor externo.
+      Obtenha em <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--blue)">console.anthropic.com</a>.
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+      <div class="fg" style="flex:2;min-width:220px">
+        <label>Anthropic API Key</label>
+        <input type="password" id="nf-apikey-input" placeholder="sk-ant-..." autocomplete="off"
+          oninput="nfSalvarChave(this.value)">
+      </div>
+      <div id="nf-chave-status" style="font-size:12px;padding-bottom:10px;color:var(--text3)">Não configurada</div>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:6px">A chave é salva no localStorage do navegador e persiste entre sessões.</div>
+  </div>
+
+  <!-- Upload -->
+  <div class="card" id="nf-upload-card">
+    <div class="drop-zone" id="drop-zone" ondragover="evDrop(event)" ondrop="dropFile(event)">
+      <input type="file" accept="image/*,application/pdf" onchange="fileChosen(this)">
+      <div class="drop-icon">🧾</div>
+      <div class="drop-txt">Clique ou arraste a foto / PDF do comprovante</div>
+      <div class="drop-sub">Nota fiscal, cupom fiscal ou foto do recibo · JPG, PNG, PDF</div>
+    </div>
+    <img id="nf-preview" style="max-width:100%;max-height:200px;border-radius:var(--radius-sm);border:1px solid var(--border);display:none;margin-top:14px">
+  </div>
+
+  <div id="nf-loading" style="display:none" class="card">
+    <div style="display:flex;align-items:center;gap:12px;font-size:13px;color:var(--text2)">
+      <div class="spin"></div><span id="nf-loading-txt">Lendo o comprovante…</span>
+    </div>
+  </div>
+  <div id="nf-erro" style="display:none" class="alert alert-red"></div>
+  <div id="nf-result" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:16px;font-weight:600" id="nf-mercado">—</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:3px" id="nf-data">—</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:24px;font-weight:600;font-family:'DM Mono',monospace" id="nf-total">—</div>
+          <div style="font-size:11px;color:var(--text3)">total da nota</div>
+        </div>
+      </div>
+      <div id="nf-body"></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-dark" onclick="nfRegistrarTodos()">✓ Registrar todos no estoque</button>
+      <button class="btn" onclick="nfCancelar()">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== PREÇOS ===== -->
+<div id="s-precos" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Histórico de Preços</div><div class="page-sub">Comparativo entre mercados</div></div>
+  </div>
+  <div class="card">
+    <div class="sec-hdr">
+      <h3>Preços por item</h3>
+      <select id="preco-filtro" onchange="renderPrecos()" style="font-size:12px;padding:5px 8px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--surface);color:var(--text)">
+        <option value="">Todos</option>
+      </select>
+    </div>
+    <div id="precos-list"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Adicionar preço manualmente</div>
+    <div class="form-row">
+      <div class="fg"><label>Item</label><select id="mp-item"></select></div>
+      <div class="fg"><label>Mercado</label><input id="mp-mercado" type="text" placeholder="Atacadão"></div>
+      <div class="fg"><label>Preço (R$)</label><input id="mp-preco" type="number" step="0.01"></div>
+      <div class="fg"><label>Data</label><input id="mp-data" type="date"></div>
+    </div>
+    <button class="btn btn-dark" onclick="addPrecoManual()">Adicionar</button>
+    <p class="success-msg" id="mp-msg"></p>
+  </div>
+</div>
+
+<!-- ===== DURAÇÃO ===== -->
+<div id="s-duracao" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Estimativa de Duração</div><div class="page-sub">Baseada no consumo médio semanal</div></div>
+  </div>
+  <div id="dur-alert"></div>
+  <div class="card">
+    <div id="dur-list"></div>
+  </div>
+</div>
+
+<!-- ===== COMPROVANTES ===== -->
+<div id="s-comprovantes" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Comprovantes</div><div class="page-sub">Área restrita — somente administrador</div></div>
+  </div>
+  <div class="card" id="comp-lock-card">
+    <div class="lock-wrap">
+      <div class="lock-ico">🔒</div>
+      <div style="font-size:15px;font-weight:600;margin-bottom:6px">Área protegida</div>
+      <div style="font-size:13px;color:var(--text2);margin-bottom:18px">Digite a senha para acessar os comprovantes de compra</div>
+      <div style="display:flex;gap:8px;justify-content:center">
+        <input type="password" id="comp-senha" placeholder="Senha" style="padding:8px 12px;border:1px solid var(--border2);border-radius:var(--radius-sm);font-size:14px;text-align:center;width:160px;font-family:'DM Sans',sans-serif" onkeydown="if(event.key==='Enter')compVerificar()">
+        <button class="btn btn-dark" onclick="compVerificar()">Entrar</button>
+      </div>
+      <p class="error-msg" id="comp-err" style="margin-top:10px;text-align:center"></p>
+      <p style="font-size:11px;color:var(--text3);margin-top:20px">Senha padrão: 1234</p>
+    </div>
+  </div>
+  <div id="comp-area" style="display:none">
+    <div class="sec-hdr" style="margin-bottom:14px">
+      <h3 style="font-size:16px;font-weight:600;text-transform:none;letter-spacing:0;color:var(--text)">Comprovantes de compra</h3>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-dark btn-sm" onclick="compAdicionar()">+ Adicionar</button>
+        <button class="btn btn-sm btn-red" onclick="compFechar()">Sair 🔒</button>
+      </div>
+    </div>
+    <div class="comp-grid" id="comp-grid"></div>
+  </div>
+</div>
+
+<!-- ===== CONFIG ===== -->
+<div id="s-config" class="screen">
+  <div class="topbar">
+    <div><div class="page-title">Configurações</div></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Ciclo de compras</div>
+    <div class="form-row">
+      <div class="fg"><label>Data da última compra geral</label><input id="cfg-ultima" type="date"></div>
+      <div class="fg"><label>Intervalo (dias)</label><input id="cfg-intervalo" type="number" min="1" value="60"></div>
+    </div>
+    <button class="btn btn-dark" onclick="salvarCiclo()">Salvar</button>
+    <p class="success-msg" id="cfg-msg"></p>
+  </div>
+  <div class="card">
+    <div class="card-title">Consumo semanal por item</div>
+    <table class="tbl">
+      <thead><tr><th>Item</th><th>Un.</th><th>Consumo/semana</th><th>Estoque atual</th><th>Duração estimada</th></tr></thead>
+      <tbody id="cfg-cons-body"></tbody>
+    </table>
+    <p class="success-msg" id="cfg-cons-msg" style="margin-top:8px"></p>
+  </div>
+</div>
+
+</main>
+</div>
+
+<script>
+// ======================== STATE ========================
+const hoje = new Date();
+const hojeStr = hoje.toISOString().split('T')[0];
+
+let itens = [
+  {id:1,nome:'Detergente',un:'L',qtd:3,min:2},
+  {id:2,nome:'Água sanitária',un:'L',qtd:1,min:3},
+  {id:3,nome:'Sabão em pó',un:'kg',qtd:5,min:2},
+  {id:4,nome:'Desinfetante',un:'L',qtd:4,min:2},
+  {id:5,nome:'Papel toalha',un:'pct',qtd:2,min:4},
+  {id:6,nome:'Esponja',un:'un',qtd:6,min:3},
+];
+let consumo = {1:1, 2:0.5, 3:0.3, 4:0.5, 5:1, 6:0.5};
+let historico = [
+  {tipo:'entrada',itemId:1,qtd:5,data:'2025-03-10',obs:'Compra mensal'},
+  {tipo:'saida',  itemId:1,qtd:2,data:'2025-03-15',obs:'Uso cozinha'},
+  {tipo:'entrada',itemId:2,qtd:4,data:'2025-03-01',obs:'NF 1021'},
+  {tipo:'saida',  itemId:2,qtd:3,data:'2025-03-20',obs:'Limpeza geral'},
+  {tipo:'entrada',itemId:5,qtd:3,data:'2025-03-05',obs:'Reposição'},
+  {tipo:'saida',  itemId:5,qtd:1,data:'2025-03-18',obs:'Banheiros'},
+];
+let precos = [
+  {itemId:1,mercado:'Atacadão',preco:4.90,data:'2025-02-10'},
+  {itemId:1,mercado:'Assaí',preco:5.20,data:'2025-03-01'},
+  {itemId:1,mercado:'Atacadão',preco:5.10,data:'2025-03-15'},
+  {itemId:2,mercado:'Atacadão',preco:3.50,data:'2025-02-10'},
+  {itemId:2,mercado:'Carrefour',preco:3.80,data:'2025-03-01'},
+  {itemId:3,mercado:'Assaí',preco:8.90,data:'2025-02-15'},
+  {itemId:3,mercado:'Atacadão',preco:8.50,data:'2025-03-10'},
+  {itemId:4,mercado:'Carrefour',preco:6.20,data:'2025-03-01'},
+  {itemId:5,mercado:'Atacadão',preco:12.90,data:'2025-03-05'},
+  {itemId:5,mercado:'Assaí',preco:11.50,data:'2025-03-15'},
+];
+let avulsas = [
+  {id:1,itemId:2,qtd:2,data:offsetDay(-10),custo:7.00,motivo:'Uso intenso na limpeza de fim de mês',local:'Mercadinho Central'},
+  {id:2,itemId:5,qtd:1,data:offsetDay(-5),custo:13.50,motivo:'Estoque acabou antes do previsto',local:'Atacadão'},
+];
+let comprovantes = [
+  {titulo:'NF-001 Março',valor:'R$ 87,50',data:'2025-03-01',nota:'Compra semanal'},
+  {titulo:'NF-002 Março',valor:'R$ 145,00',data:'2025-03-15',nota:'Reposição geral'},
+];
+let ultimaCompra = new Date(hoje); ultimaCompra.setDate(ultimaCompra.getDate()-18);
+let intervalo = 60;
+let nextId = 7, nextAvId = 3;
+let nfAtual = null;
+
+// ======================== HELPERS ========================
+function offsetDay(n){ const d=new Date(hoje); d.setDate(d.getDate()+n); return d.toISOString().split('T')[0]; }
+function addDays(d,n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function fmtDate(d){ return new Date(d).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+function fmtShort(d){ return new Date(d).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}); }
+function proxCompra(){ const d=new Date(ultimaCompra); d.setDate(d.getDate()+intervalo); return d; }
+function diasAteProx(){ return Math.ceil((proxCompra()-hoje)/(864e5)); }
+function duraDias(itemId){ const c=consumo[itemId]||0; if(!c) return Infinity; const it=itens.find(i=>i.id===itemId); return Math.floor(it.qtd/c*7); }
+function getNome(id){ return (itens.find(i=>i.id===id)||{}).nome||'?'; }
+function getUn(id){ return (itens.find(i=>i.id===id)||{}).un||''; }
+function showMsg(id,txt,color){ const el=document.getElementById(id); if(!el) return; el.style.color=color||'var(--green)'; el.textContent=txt; setTimeout(()=>el.textContent='',3000); }
+function sel(id){ return document.getElementById(id); }
+
+// ======================== NAVIGATION ========================
+function goScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
+  const s=document.getElementById('s-'+id); if(s) s.classList.add('active');
+
+  // Highlight nav
+  document.querySelectorAll('.nav-item').forEach(b=>{
+    if(b.getAttribute('onclick')===`goScreen('${id}')`) b.classList.add('active');
+  });
+
+  const renders = {
+    dashboard: renderDashboard,
+    ciclo: renderCiclo,
+    timeline: renderTimeline,
+    estoque: renderEstoque,
+    historico: ()=>{popularFiltroHist();renderHistorico();},
+    avulsas: ()=>{popularSel('av-item');sel('av-data').value=hojeStr;renderAvulsas();},
+    entrada: ()=>{popularSel('ent-item');sel('ent-data').value=hojeStr;},
+    saida: ()=>{popularSel('sai-item');sel('sai-data').value=hojeStr;},
+    precos: ()=>{popularFiltroPreco();popularSel('mp-item');sel('mp-data').value=hojeStr;renderPrecos();},
+    duracao: renderDuracao,
+    config: renderConfig,
+  };
+  if(renders[id]) renders[id]();
+}
+
+function popularSel(id){
+  const el=sel(id); if(!el) return;
+  el.innerHTML=itens.map(i=>`<option value="${i.id}">${i.nome} (${i.qtd} ${i.un})</option>`).join('');
+}
+
+// ======================== DASHBOARD ========================
+function renderDashboard(){
+  const dap=diasAteProx();
+  sel('dash-sub').textContent=`Próxima compra geral: ${fmtDate(proxCompra())} (${dap} dias)`;
+
+  const baixo=itens.filter(i=>i.qtd<i.min);
+  const naoChega=itens.filter(i=>consumo[i.id]&&duraDias(i.id)<dap);
+  let alerts='';
+  if(baixo.length) alerts+=`<div class="alert alert-red">🚨 <div><b>Estoque abaixo do mínimo:</b> ${baixo.map(i=>i.nome).join(', ')}</div></div>`;
+  if(naoChega.length) alerts+=`<div class="alert alert-amber">⚠ <div><b>Não chegam até a próxima compra:</b> ${naoChega.map(i=>i.nome).join(', ')}</div></div>`;
+  if(!baixo.length&&!naoChega.length) alerts+=`<div class="alert alert-green">✓ <div>Todos os itens em situação normal.</div></div>`;
+  sel('dash-alerts').innerHTML=alerts;
+
+  // Badge
+  const totalAlerta=baixo.length+naoChega.length;
+  const badge=sel('badge-alerta');
+  badge.textContent=totalAlerta; badge.style.display=totalAlerta?'':'none';
+  badge.className='nav-badge'+(totalAlerta>0?' warn':'');
+
+  sel('dash-metrics').innerHTML=`
+    <div class="metric"><div class="metric-label">Itens cadastrados</div><div class="metric-value">${itens.length}</div><div class="metric-sub">produtos</div></div>
+    <div class="metric"><div class="metric-label">Em alerta</div><div class="metric-value ${baixo.length?'mv-red':'mv-green'}">${baixo.length}</div><div class="metric-sub">abaixo do mínimo</div></div>
+    <div class="metric"><div class="metric-label">Não chegam</div><div class="metric-value ${naoChega.length?'mv-amber':'mv-green'}">${naoChega.length}</div><div class="metric-sub">até próxima compra</div></div>
+    <div class="metric"><div class="metric-label">Dias restantes</div><div class="metric-value mono ${dap<=7?'mv-red':dap<=20?'mv-amber':'mv-green'}">${dap}</div><div class="metric-sub">no ciclo</div></div>
+    <div class="metric"><div class="metric-label">Reposições avulsas</div><div class="metric-value">${avulsas.filter(a=>new Date(a.data)>=ultimaCompra).length}</div><div class="metric-sub">neste ciclo</div></div>`;
+
+  sel('dash-body').innerHTML=itens.map(i=>{
+    const c=consumo[i.id];
+    const dr=c?duraDias(i.id):null;
+    const st=i.qtd<i.min?'b-red':(!c?'b-neu':(dr<dap?'b-warn':'b-ok'));
+    const stxt=i.qtd<i.min?'Crítico':(!c?'—':(dr<dap?(dr<=7?'Urgente':'Repor antes'):'Normal'));
+    const durTxt=c?`~${dr<=7?dr+' dias':dr<=60?Math.round(dr/7)+' sem':Math.round(dr/30)+' meses'}`:'—';
+    const esg=c?fmtDate(addDays(hoje,dr)):'—';
+    return `<tr>
+      <td><b>${i.nome}</b></td>
+      <td class="mono">${i.qtd} ${i.un}</td>
+      <td class="mono">${i.min} ${i.un}</td>
+      <td style="font-size:12px">${esg}</td>
+      <td><span class="badge ${st}">${stxt}</span></td>
+    </tr>`;
+  }).join('');
+
+  const ultH=[...historico].reverse().slice(0,6);
+  sel('dash-hist').innerHTML=ultH.length?ultH.map(h=>`
+    <div class="hist-item">
+      <div class="hist-dot ${h.tipo==='entrada'?'hd-in':'hd-out'}"></div>
+      <div class="hist-txt"><b>${h.tipo==='entrada'?'+':'−'}${h.qtd} ${getUn(h.itemId)} ${getNome(h.itemId)}</b>${h.obs?` · <span style="color:var(--text2)">${h.obs}</span>`:''}</div>
+      <div class="hist-date">${h.data}</div>
+    </div>`).join(''):'<div class="empty">Sem movimentações.</div>';
+}
+
+// ======================== CICLO ========================
+function renderCiclo(){
+  const dap=diasAteProx();
+  const pct=Math.max(0,Math.min(100,(intervalo-dap)/intervalo*100));
+  const estado=dap<=7?'danger':dap<=20?'warn':'safe';
+  const progcls='prog-'+{danger:'red',warn:'amber',safe:'green'}[estado];
+
+  sel('ciclo-banner').innerHTML=`
+    <div class="ciclo-card ciclo-${estado}">
+      <div><div class="ciclo-days">${dap}</div><div style="font-size:12px;opacity:.7;margin-top:3px">dias restantes</div></div>
+      <div class="ciclo-info">
+        <div class="ciclo-title">Próxima compra: ${fmtDate(proxCompra())}</div>
+        <div class="ciclo-sub">Última: ${fmtDate(ultimaCompra)} · Ciclo de ${intervalo} dias</div>
+        <div class="prog-wrap"><div class="prog-bar ${progcls}" style="width:${pct.toFixed(1)}%"></div></div>
+        <div style="font-size:11px;opacity:.65">${Math.round(pct)}% do ciclo decorrido</div>
+      </div>
+    </div>`;
+
+  const criticos=itens.filter(i=>consumo[i.id]&&duraDias(i.id)<dap);
+  const urgentes=criticos.filter(i=>duraDias(i.id)<=7);
+  const moderados=criticos.filter(i=>duraDias(i.id)>7&&duraDias(i.id)<=21);
+  let alerts='';
+  if(urgentes.length) alerts+=`<div class="alert alert-red">🚨 <div><b>Reposição urgente:</b> ${urgentes.map(i=>i.nome).join(', ')} — estoque acaba em menos de 1 semana.</div></div>`;
+  if(moderados.length) alerts+=`<div class="alert alert-amber">⚠ <b>Atenção:</b> ${moderados.map(i=>i.nome).join(', ')} não chegam até a próxima compra geral.</div>`;
+  if(!criticos.length) alerts+=`<div class="alert alert-green">✓ Todos os itens devem durar até ${fmtDate(proxCompra())}.</div>`;
+  sel('ciclo-alerts').innerHTML=alerts;
+
+  sel('ciclo-body').innerHTML=itens.map(i=>{
+    const c=consumo[i.id];
+    if(!c) return `<tr><td>${i.nome}</td><td>${i.qtd} ${i.un}</td><td colspan="3" style="color:var(--text3);font-size:12px">consumo não configurado</td><td></td></tr>`;
+    const dr=duraDias(i.id);
+    const chega=dr>=dap;
+    const pct2=Math.min(100,(dr/dap)*100);
+    const cor2=dr<=7?'dur-r':dr<=21?'dur-y':'dur-g';
+    const durTxt=dr<=7?`${dr} dias`:dr<=60?`~${Math.round(dr/7)} sem`:`~${Math.round(dr/30)} meses`;
+    const badge=chega?'<span class="badge b-ok">✓ Chega</span>':(dr<=7?'<span class="badge b-red">Urgente</span>':'<span class="badge b-warn">Repor antes</span>');
+    const btn=!chega?`<button class="btn btn-amber btn-sm" onclick="goScreen('avulsas')">+ Repor</button>`:'';
+    return `<tr>
+      <td><b>${i.nome}</b></td>
+      <td class="mono">${i.qtd} ${i.un}</td>
+      <td>
+        <div style="font-size:13px">${fmtDate(addDays(hoje,dr))}</div>
+        <div class="dur-wrap"><div class="dur-bar ${cor2}" style="width:${pct2}%"></div></div>
+        <div style="font-size:11px;color:var(--text3)">${durTxt}</div>
+      </td>
+      <td class="mono">${dap} dias</td>
+      <td>${badge}</td>
+      <td>${btn}</td>
+    </tr>`;
+  }).join('');
+
+  const avC=avulsas.filter(a=>new Date(a.data)>=ultimaCompra);
+  const totalExtra=avC.reduce((s,a)=>s+a.custo,0);
+  sel('ciclo-extra').innerHTML=avC.length
+    ?`<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <div style="flex:1"><div style="font-size:13px;color:var(--text2)">${avC.length} reposição(ões) avulsa(s)</div><div style="font-size:12px;color:var(--text3);margin-top:3px">${avC.map(a=>getNome(a.itemId)).join(', ')}</div></div>
+        <div style="font-size:24px;font-weight:600;font-family:'DM Mono',monospace;color:var(--amber)">R$ ${totalExtra.toFixed(2)}</div>
+      </div>`
+    :'<div class="empty">Nenhuma reposição avulsa neste ciclo.</div>';
+}
+
+// ======================== TIMELINE ========================
+function renderTimeline(){
+  const prox=proxCompra();
+  const dap=diasAteProx();
+  let evs=[];
+
+  evs.push({data:prox,tipo:'compra',title:'Compra geral programada',sub:`Ciclo de ${intervalo} dias · ${fmtDate(prox)}`});
+
+  itens.forEach(i=>{
+    const c=consumo[i.id]; if(!c) return;
+    const dr=duraDias(i.id);
+    const esg=addDays(hoje,dr);
+    if(esg<prox){
+      const est=dr<=7?'danger':dr<=21?'warn':'ok';
+      evs.push({data:esg,tipo:est,title:`${i.nome} esgota`,sub:`Estoque: ${i.qtd} ${i.un} · consumo: ${c}/sem`});
+    }
+  });
+
+  avulsas.forEach(a=>{
+    evs.push({data:new Date(a.data),tipo:'avulso',title:`Reposição avulsa — ${getNome(a.itemId)}`,sub:`${a.qtd} ${getUn(a.itemId)} · ${a.local||''} · R$ ${a.custo.toFixed(2)}`});
+  });
+
+  evs.push({data:hoje,tipo:'today',title:'Hoje',sub:fmtDate(hoje)});
+  evs.sort((a,b)=>a.data-b.data);
+
+  const dotMap={danger:'td-danger',warn:'td-warn',ok:'td-ok',avulso:'td-blue',today:'td-today',compra:'td-compra'};
+  sel('tl-content').innerHTML='<div class="tl-line"></div>'+evs.map(ev=>{
+    const past=ev.data<hoje;
+    return `<div class="tl-item" style="${past?'opacity:.5':''}">
+      <div class="tl-dot ${dotMap[ev.tipo]||'td-compra'}"></div>
+      <div class="tl-date">${fmtDate(ev.data)}${past?' · passado':''}</div>
+      <div class="tl-title">${ev.title}</div>
+      <div class="tl-sub">${ev.sub}</div>
+    </div>`;
+  }).join('');
+}
+
+// ======================== ESTOQUE ========================
+function renderEstoque(){
+  sel('est-body').innerHTML=itens.map(i=>{
+    const st=i.qtd<i.min?'b-red':(i.qtd===i.min?'b-warn':'b-ok');
+    const stxt=i.qtd<i.min?'Crítico':(i.qtd===i.min?'No limite':'Normal');
+    return `<tr>
+      <td><b>${i.nome}</b></td><td>${i.un}</td>
+      <td class="mono">${i.qtd}</td><td class="mono">${i.min}</td>
+      <td class="mono">${consumo[i.id]||'—'}</td>
+      <td><span class="badge ${st}">${stxt}</span></td>
+      <td><button class="btn btn-sm btn-red" onclick="excluirItem(${i.id})">Excluir</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function excluirItem(id){
+  if(!confirm('Excluir este item?')) return;
+  itens=itens.filter(i=>i.id!==id);
+  renderEstoque();
+}
+
+function cadastrarItem(){
+  const nome=sel('ci-nome').value.trim();
+  if(!nome) return;
+  const id=nextId++;
+  itens.push({id,nome,un:sel('ci-un').value,qtd:+sel('ci-qtd').value||0,min:+sel('ci-min').value||1});
+  consumo[id]=+sel('ci-cons').value||0;
+  showMsg('ci-msg','✓ Item cadastrado!');
+  sel('ci-nome').value=''; sel('ci-qtd').value=0; sel('ci-min').value=2; sel('ci-cons').value=1;
+  setTimeout(()=>goScreen('estoque'),800);
+}
+
+// ======================== ENTRADA / SAÍDA ========================
+function registrarEntrada(){
+  const id=+sel('ent-item').value, qtd=+sel('ent-qtd').value, data=sel('ent-data').value;
+  if(!qtd||!data) return;
+  const it=itens.find(i=>i.id===id);
+  it.qtd+=qtd;
+  historico.push({tipo:'entrada',itemId:id,qtd,data,obs:sel('ent-obs').value});
+  showMsg('ent-msg',`✓ +${qtd} ${it.un} de ${it.nome}. Estoque: ${it.qtd} ${it.un}`);
+  popularSel('ent-item');
+}
+
+function registrarSaida(){
+  sel('sai-err').textContent='';
+  const id=+sel('sai-item').value, qtd=+sel('sai-qtd').value, data=sel('sai-data').value;
+  if(!qtd||!data) return;
+  const it=itens.find(i=>i.id===id);
+  if(qtd>it.qtd){sel('sai-err').textContent='Quantidade maior que o estoque disponível.';return;}
+  it.qtd-=qtd;
+  historico.push({tipo:'saida',itemId:id,qtd,data,obs:sel('sai-obs').value});
+  showMsg('sai-msg',`✓ −${qtd} ${it.un} de ${it.nome}. Estoque: ${it.qtd} ${it.un}`);
+  popularSel('sai-item');
+}
+
+// ======================== AVULSAS ========================
+function registrarAvulsa(){
+  const id=+sel('av-item').value, qtd=+sel('av-qtd').value, data=sel('av-data').value;
+  const custo=parseFloat(sel('av-custo').value)||0;
+  if(!qtd||!data) return;
+  const it=itens.find(i=>i.id===id);
+  it.qtd+=qtd;
+  avulsas.push({id:nextAvId++,itemId:id,qtd,data,custo,motivo:sel('av-motivo').value,local:sel('av-local').value});
+  historico.push({tipo:'avulso',itemId:id,qtd,data,obs:`Avulsa: ${sel('av-motivo').value}`});
+  showMsg('av-msg',`✓ Reposição de ${qtd} ${it.un} de ${it.nome} registrada.`);
+  sel('av-qtd').value=1; sel('av-custo').value=''; sel('av-motivo').value=''; sel('av-local').value='';
+  renderAvulsas();
+}
+
+function renderAvulsas(){
+  const filtro=sel('av-filtro').value;
+  let lista=avulsas;
+  if(filtro==='atual') lista=avulsas.filter(a=>new Date(a.data)>=ultimaCompra);
+  lista=[...lista].sort((a,b)=>new Date(b.data)-new Date(a.data));
+  if(!lista.length){sel('av-list').innerHTML='<div class="empty">Nenhuma reposição avulsa neste período.</div>';return;}
+  const total=lista.reduce((s,a)=>s+a.custo,0);
+  sel('av-list').innerHTML=
+    `<div style="font-size:12px;color:var(--text2);margin-bottom:12px">${lista.length} registro(s) · custo extra total: <b style="color:var(--amber)">R$ ${total.toFixed(2)}</b></div>`+
+    lista.map(a=>`
+      <div class="av-card">
+        <div class="av-icon">⚡</div>
+        <div class="av-body">
+          <div class="av-title">${getNome(a.itemId)} — ${a.qtd} ${getUn(a.itemId)}</div>
+          <div class="av-sub">${a.motivo||'Sem motivo registrado'}</div>
+          <div class="av-meta">
+            <span class="mono">${fmtDate(a.data)}</span>
+            ${a.local?`· ${a.local}`:''}
+            <span class="cost-tag ${a.custo>20?'ct-warn':'ct-ok'}">R$ ${a.custo.toFixed(2)}</span>
+          </div>
+        </div>
+      </div>`).join('');
+}
+
+// ======================== HISTÓRICO ========================
+function popularFiltroHist(){
+  sel('hist-filtro').innerHTML=`<option value="">Todos os itens</option>`+itens.map(i=>`<option value="${i.id}">${i.nome}</option>`).join('');
+}
+function renderHistorico(){
+  const filtro=sel('hist-filtro').value;
+  let lista=[...historico].reverse();
+  if(filtro) lista=lista.filter(h=>h.itemId==filtro);
+  const dot={entrada:'hd-in',saida:'hd-out',avulso:'hd-av'};
+  sel('hist-list').innerHTML=lista.length?lista.map(h=>`
+    <div class="hist-item">
+      <div class="hist-dot ${dot[h.tipo]||'hd-out'}"></div>
+      <div class="hist-txt"><b>${h.tipo==='entrada'?'+':'−'}${h.qtd} ${getUn(h.itemId)} ${getNome(h.itemId)}</b>${h.obs?` · <span style="color:var(--text2)">${h.obs}</span>`:''}</div>
+      <div class="hist-date mono">${h.data}</div>
+    </div>`).join(''):'<div class="empty">Nenhuma movimentação encontrada.</div>';
+}
+
+// ======================== LEITOR NF ========================
+function evDrop(e){e.preventDefault();sel('drop-zone').classList.add('drag');}
+function dropFile(e){e.preventDefault();const f=e.dataTransfer.files[0];if(f)processNF(f);}
+function fileChosen(inp){if(inp.files[0])processNF(inp.files[0]);}
+
+function processNF(file){
+  sel('nf-result').style.display='none';
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const data=e.target.result;
+    const prev=sel('nf-preview');
+    if(file.type.startsWith('image/')){prev.src=data;prev.style.display='block';}else{prev.style.display='none';}
+    analisarNF(data,file.type);
+  };
+  reader.readAsDataURL(file);
+}
+
+// ── Chave API ───────────────────────────────────────────────────────────────
+function nfCarregarChave() {
+  const k = localStorage.getItem('nf_api_key') || '';
+  if (k) {
+    sel('nf-apikey-input').value = k;
+    sel('nf-chave-status').textContent = '✓ Configurada';
+    sel('nf-chave-status').style.color = 'var(--green)';
+  }
+  return k;
+}
+function nfSalvarChave(v) {
+  v = v.trim();
+  if (v) {
+    localStorage.setItem('nf_api_key', v);
+    sel('nf-chave-status').textContent = '✓ Salva';
+    sel('nf-chave-status').style.color = 'var(--green)';
+  } else {
+    localStorage.removeItem('nf_api_key');
+    sel('nf-chave-status').textContent = 'Não configurada';
+    sel('nf-chave-status').style.color = 'var(--text3)';
+  }
+}
+
+async function analisarNF(dataUrl, mimeType) {
+  const apiKey = (localStorage.getItem('nf_api_key') || '').trim();
+  if (!apiKey) {
+    nfErro('Configure sua chave de API acima antes de enviar o comprovante.');
+    return;
+  }
+
+  sel('nf-loading').style.display = 'block';
+  sel('nf-result').style.display  = 'none';
+  sel('nf-erro').style.display    = 'none';
+
+  const msgs = ['Lendo o comprovante…', 'Identificando itens e preços…', 'Comparando com histórico…', 'Calculando variações…'];
+  let mi = 0;
+  const iv = setInterval(() => { mi = (mi+1) % msgs.length; sel('nf-loading-txt').textContent = msgs[mi]; }, 1400);
+
+  try {
+    const b64      = dataUrl.split(',')[1];
+    const mt       = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+    const isImg    = mt.startsWith('image/');
+    const itensCad = itens.map(i => i.nome).join(', ');
+    const histP    = precos.slice(-30).map(h => `${getNome(h.itemId)}: R$${h.preco.toFixed(2)} em ${h.mercado} (${h.data})`).join('\n');
+
+    const promptTxt = `Você é um assistente especializado em controle de estoque de produtos de limpeza.
+Analise este comprovante/nota fiscal e extraia TODOS os itens comprados.
+
+Itens já cadastrados no sistema: ${itensCad}
+Histórico de preços recentes:
+${histP}
+
+INSTRUÇÕES:
+- Extraia todos os produtos visíveis na nota, mesmo os que não estão cadastrados no sistema.
+- "item_cadastrado": nome EXATO do item cadastrado se houver correspondência clara, ou null se for produto novo.
+- "variacao_pct": variação percentual vs último preço no histórico (negativo=queda, positivo=alta, null=sem histórico).
+- "tendencia": "alta", "queda", "estavel" ou "novo".
+- "data": data do comprovante em YYYY-MM-DD. Se não visível, use ${hojeStr}.
+- "quantidade": número (ex: 2), "preco_unitario": número sem R$ (ex: 4.90).
+
+Responda SOMENTE com JSON válido, sem markdown, sem texto antes ou depois:
+{"mercado":"nome","data":"YYYY-MM-DD","total":"R$ XX,XX","itens":[{"nome":"nome do produto","quantidade":1,"unidade":"un","preco_unitario":0.00,"item_cadastrado":null,"variacao_pct":null,"tendencia":"novo"}]}`;
+
+    const content = isImg
+      ? [{type:'image', source:{type:'base64', media_type:mt, data:b64}}, {type:'text', text:promptTxt}]
+      : [{type:'document', source:{type:'base64', media_type:'application/pdf', data:b64}}, {type:'text', text:promptTxt}];
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type':                             'application/json',
+        'x-api-key':                                apiKey,
+        'anthropic-version':                        '2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true',
+      },
+      body: JSON.stringify({
+        model:      'claude-opus-4-5',
+        max_tokens: 1500,
+        messages:   [{role:'user', content}],
+      }),
+    });
+
+    clearInterval(iv);
+    sel('nf-loading').style.display = 'none';
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      const msg = err?.error?.message || `Erro HTTP ${resp.status}`;
+      if (resp.status === 401) nfErro('Chave de API inválida. Verifique e tente novamente.');
+      else nfErro('Erro da API: ' + msg);
+      return;
+    }
+
+    const dados = await resp.json();
+    let txt = '';
+    for (const bloco of (dados.content || [])) {
+      if (bloco.type === 'text') txt += bloco.text;
+    }
+    txt = txt.replace(/```json|```/g, '').trim();
+    nfAtual = JSON.parse(txt);
+    nfMostrar(nfAtual);
+
+  } catch (e) {
+    clearInterval(iv);
+    sel('nf-loading').style.display = 'none';
+    nfErro('Erro ao processar: ' + e.message);
+  }
+}
+
+function nfErro(msg) {
+  const el = sel('nf-erro');
+  el.textContent = '⚠ ' + msg;
+  el.style.display = 'block';
+}
+
+function nfMostrar(r){
+  sel('nf-mercado').textContent=r.mercado||'Mercado não identificado';
+  sel('nf-data').textContent=fmtDate(r.data)||hojeStr;
+  sel('nf-total').textContent=r.total||'—';
+
+  const novos=r.itens.filter(it=>!itens.find(x=>x.nome.toLowerCase()===(it.item_cadastrado||it.nome).toLowerCase()));
+  const aviso=novos.length
+    ?`<div class="alert alert-blue" style="margin-bottom:14px">ℹ <div><b>${novos.length} item(ns) novo(s) detectado(s)</b> na nota — serão cadastrados automaticamente ao confirmar: <b>${novos.map(it=>it.nome).join(', ')}</b>.</div></div>`
+    :'';
+
+  sel('nf-body').innerHTML=aviso+`<table class="tbl" style="margin-top:4px">
+    <thead><tr><th>Item</th><th>Qtd</th><th>Un.</th><th>Preço unit.</th><th>Variação</th><th>Incluir</th></tr></thead>
+    <tbody>`+(r.itens||[]).map((it,i)=>{
+    const vp=it.variacao_pct;
+    const cadastrado=!!itens.find(x=>x.nome.toLowerCase()===(it.item_cadastrado||it.nome).toLowerCase());
+    let varBadge='';
+    if(it.tendencia==='novo'||!cadastrado) varBadge='<span class="badge b-info">Novo item</span>';
+    else if(it.tendencia==='alta') varBadge=`<span class="badge b-warn">▲ ${vp!=null?Math.abs(vp).toFixed(1)+'%':''}</span>`;
+    else if(it.tendencia==='queda') varBadge=`<span class="badge b-ok">▼ ${vp!=null?Math.abs(vp).toFixed(1)+'%':''}</span>`;
+    else varBadge='<span class="badge b-neu">Estável</span>';
+    const statusIcon=cadastrado
+      ?`<span title="Item já cadastrado" style="color:var(--green);font-size:12px">✓ cadastrado</span>`
+      :`<span title="Será cadastrado automaticamente" style="color:var(--blue);font-size:12px">+ novo</span>`;
+    return `<tr style="${!cadastrado?'background:var(--blue-bg)':''}">
+      <td><b>${it.nome}</b><br><span style="font-size:11px">${statusIcon}</span></td>
+      <td class="mono">${it.quantidade}</td>
+      <td style="font-size:12px;color:var(--text2)">${it.unidade||'un'}</td>
+      <td class="mono">R$ ${(it.preco_unitario||0).toFixed(2)}</td>
+      <td>${varBadge}</td>
+      <td><input type="checkbox" id="nfc-${i}" checked style="cursor:pointer;width:16px;height:16px"></td>
+    </tr>`;
+  }).join('')+`</tbody></table>`;
+
+  sel('nf-result').style.display='block';
+}
+
+function nfRegistrarTodos(){
+  if(!nfAtual) return;
+  const mercado=nfAtual.mercado||'Desconhecido';
+  const data=nfAtual.data||hojeStr;
+  let countEntrada=0, countNovo=0;
+
+  (nfAtual.itens||[]).forEach((it,i)=>{
+    const chk=document.getElementById('nfc-'+i);
+    if(!chk?.checked) return;
+
+    const nomeRef=(it.item_cadastrado||it.nome).toLowerCase();
+    let item=itens.find(x=>x.nome.toLowerCase()===nomeRef);
+
+    // Cadastra automaticamente se não existir
+    if(!item){
+      const novoId=nextId++;
+      item={id:novoId, nome:it.nome, un:it.unidade||'un', qtd:0, min:1};
+      itens.push(item);
+      consumo[novoId]=0;
+      countNovo++;
+    }
+
+    // Dá entrada no estoque
+    item.qtd+=it.quantidade;
+
+    // Registra no histórico
+    historico.push({
+      tipo:'entrada',
+      itemId:item.id,
+      qtd:it.quantidade,
+      data,
+      obs:`NF – ${mercado}${it.preco_unitario?` · R$ ${it.preco_unitario.toFixed(2)}/un`:''}`
+    });
+
+    // Registra preço
+    if(it.preco_unitario){
+      precos.push({itemId:item.id, mercado, preco:it.preco_unitario, data});
+    }
+
+    countEntrada++;
+  });
+
+  // Resumo do que aconteceu
+  let msg=`✓ ${countEntrada} item(ns) com entrada registrada no estoque.`;
+  if(countNovo) msg+=`\n+ ${countNovo} item(ns) novo(s) cadastrado(s) automaticamente.`;
+  msg+=`\n\nVocê pode ajustar o estoque mínimo e o consumo semanal dos itens novos em Configurações.`;
+  alert(msg);
+  nfCancelar();
+}
+
+function nfCancelar(){
+  sel('nf-result').style.display='none';
+  sel('nf-preview').style.display='none';
+  sel('nf-body').innerHTML='';
+  nfAtual=null;
+}
+
+// ======================== PREÇOS ========================
+function popularFiltroPreco(){
+  sel('preco-filtro').innerHTML=`<option value="">Todos</option>`+itens.map(i=>`<option value="${i.id}">${i.nome}</option>`).join('');
+}
+function renderPrecos(){
+  const filtro=sel('preco-filtro').value;
+  const alvo=filtro?itens.filter(i=>i.id==filtro):itens;
+  sel('precos-list').innerHTML=alvo.map(item=>{
+    const hist=precos.filter(h=>h.itemId===item.id).sort((a,b)=>a.data.localeCompare(b.data));
+    if(!hist.length) return `<div class="price-row-item"><div class="price-hdr"><span style="font-weight:600">${item.nome}</span><span style="font-size:12px;color:var(--text3)">sem histórico</span></div></div>`;
+    const ult=hist[hist.length-1];
+    const pen=hist.length>1?hist[hist.length-2]:null;
+    let varStr='';
+    if(pen){const vp=((ult.preco-pen.preco)/pen.preco*100);varStr=`<span class="badge ${vp>0?'b-warn':vp<0?'b-ok':'b-neu'}">${vp>0?'▲':'▼'} ${Math.abs(vp).toFixed(1)}%</span>`;}
+    const porM={};
+    hist.forEach(h=>{if(!porM[h.mercado]||h.preco<porM[h.mercado])porM[h.mercado]=h.preco;});
+    const melhor=Object.entries(porM).sort((a,b)=>a[1]-b[1])[0];
+    return `<div class="price-row-item">
+      <div class="price-hdr">
+        <span style="font-weight:600;font-size:13px">${item.nome}</span>
+        <span style="font-weight:600;font-family:'DM Mono',monospace">R$ ${ult.preco.toFixed(2)} ${varStr}</span>
+      </div>
+      <div class="chips-row">${Object.entries(porM).map(([m,p])=>`<span class="price-chip ${m===melhor[0]?'best':''}">${m}: R$ ${p.toFixed(2)}${m===melhor[0]?' ★':''}</span>`).join('')}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:6px">${hist.length} registro(s) · última: ${ult.mercado}, ${ult.data}</div>
+    </div>`;
+  }).join('');
+}
+
+function addPrecoManual(){
+  const id=+sel('mp-item').value;
+  const mercado=sel('mp-mercado').value.trim();
+  const preco=parseFloat(sel('mp-preco').value);
+  const data=sel('mp-data').value;
+  if(!mercado||!preco||!data) return;
+  precos.push({itemId:id,mercado,preco,data});
+  showMsg('mp-msg','✓ Preço registrado!');
+  renderPrecos();
+}
+
+// ======================== DURAÇÃO ========================
+function renderDuracao(){
+  const dap=diasAteProx();
+  const alertas=[];
+  const rows=itens.map(i=>{
+    const c=consumo[i.id];
+    if(!c) return `<div class="price-row-item"><div class="price-hdr"><span style="font-weight:600">${i.nome}</span><span style="font-size:12px;color:var(--text3)">consumo não configurado</span></div></div>`;
+    const dr=duraDias(i.id);
+    const pct=Math.min(100,dr/8/7*100);
+    const cor=dr<=7?'dur-r':dr<=21?'dur-y':'dur-g';
+    const txt=dr<=7?`Crítico — ${dr} dias`:dr<=14?`~${dr} dias`:dr<=60?`~${Math.round(dr/7)} semanas`:`~${Math.round(dr/30)} meses`;
+    if(dr<dap) alertas.push(`${i.nome} (${txt})`);
+    return `<div class="price-row-item">
+      <div class="price-hdr">
+        <span style="font-weight:600;font-size:13px">${i.nome}</span>
+        <span style="font-size:13px;color:${dr<=7?'var(--red)':dr<=21?'var(--amber)':'var(--green)'};font-weight:600">${txt}</span>
+      </div>
+      <div class="dur-wrap"><div class="dur-bar ${cor}" style="width:${pct}%"></div></div>
+      <div style="font-size:11px;color:var(--text3)">${i.qtd} ${i.un} em estoque · consumo: ${c} ${i.un}/semana</div>
+    </div>`;
+  }).join('');
+  sel('dur-list').innerHTML=rows;
+  sel('dur-alert').innerHTML=alertas.length
+    ?`<div class="alert alert-amber" style="margin-bottom:14px">⏰ <div><b>Não chegam até a próxima compra:</b> ${alertas.join(' · ')}</div></div>`:'';
+}
+
+// ======================== COMPROVANTES ========================
+const SENHA='1234';
+function compVerificar(){
+  const v=sel('comp-senha').value;
+  if(v===SENHA){
+    sel('comp-lock-card').style.display='none';
+    sel('comp-area').style.display='block';
+    sel('comp-senha').value='';
+    sel('comp-err').textContent='';
+    renderComp();
+  }else{
+    sel('comp-err').textContent='Senha incorreta.';
+    sel('comp-senha').value='';
+  }
+}
+function compFechar(){
+  sel('comp-lock-card').style.display='block';
+  sel('comp-area').style.display='none';
+}
+function renderComp(){
+  sel('comp-grid').innerHTML=comprovantes.map((c,i)=>
+    `<div class="comp-card" onclick="alert('${c.titulo}\\nValor: ${c.valor}\\nData: ${c.data}\\nNota: ${c.nota}')">
+      <div class="comp-ico">🧾</div>
+      <div class="comp-title">${c.titulo}</div>
+      <div class="comp-sub">${c.valor} · ${fmtDate(c.data)}</div>
+      <div class="comp-sub" style="margin-top:3px;color:var(--text3)">${c.nota}</div>
+    </div>`).join('');
+}
+function compAdicionar(){
+  const titulo=prompt('Título (ex: NF-003 Abril):'); if(!titulo) return;
+  const valor=prompt('Valor (ex: R$ 90,00):')||'';
+  const nota=prompt('Observação:')||'';
+  comprovantes.push({titulo,valor,data:hojeStr,nota});
+  renderComp();
+}
+
+// ======================== CONFIG ========================
+function renderConfig(){
+  sel('cfg-ultima').value=ultimaCompra.toISOString().split('T')[0];
+  sel('cfg-intervalo').value=intervalo;
+  sel('cfg-cons-body').innerHTML=itens.map(i=>`
+    <tr>
+      <td><b>${i.nome}</b></td>
+      <td>${i.un}</td>
+      <td><input type="number" value="${consumo[i.id]||0}" min="0" step="0.1"
+        style="width:90px;padding:5px 8px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-size:13px;font-family:'DM Sans',sans-serif"
+        onchange="consumo[${i.id}]=+this.value;document.getElementById('cfg-cons-msg').textContent='✓ Salvo';setTimeout(()=>document.getElementById('cfg-cons-msg').textContent='',2000)"></td>
+      <td class="mono">${i.qtd} ${i.un}</td>
+      <td style="font-size:12px;color:var(--text2)">${consumo[i.id]?'~'+duraDias(i.id)+' dias':'—'}</td>
+    </tr>`).join('');
+}
+function salvarCiclo(){
+  const d=sel('cfg-ultima').value, inv=+sel('cfg-intervalo').value;
+  if(!d||!inv) return;
+  ultimaCompra=new Date(d); intervalo=inv;
+  showMsg('cfg-msg','✓ Ciclo atualizado!');
+}
+
+// ======================== INIT ========================
+document.getElementById('sf-date').textContent=new Date().toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'});
+renderDashboard();
+// Carregar chave ao navegar para o leitor
+const _goScreenBase = goScreen;
+goScreen = function(id) {
+  _goScreenBase(id);
+  if (id === 'leitor') setTimeout(() => { if (sel('nf-apikey-input')) nfCarregarChave(); }, 50);
+};
+// Carregar na abertura caso já esteja na tela do leitor
+if (sel('nf-apikey-input')) nfCarregarChave();
+</script>
+</body>
+</html>
