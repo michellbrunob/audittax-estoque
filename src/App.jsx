@@ -641,6 +641,7 @@ function App() {
           showFlash(parsedPdf.accessKey ? 'PDF textual importado com chave e itens.' : 'PDF textual importado. Confira a chave antes de importar.', parsedPdf.accessKey ? 'success' : 'warn');
           return;
         }
+        const rendered = await renderPdfFirstPage(file);
         previewDataUrl = rendered.dataUrl;
         sourceForOcr = rendered.blob;
       } else {
