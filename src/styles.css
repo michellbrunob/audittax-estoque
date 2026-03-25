@@ -7,3 +7,6 @@
 
 .table-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.table-actions .ghost-button,.table-actions .table-action{padding:8px 10px}
 
+
+.filters-row{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end}.receipt-item{border:1px solid var(--line);border-radius:var(--radius-sm);padding:16px;background:var(--panel);display:grid;gap:10px}.receipt-item-head,.receipt-meta{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.receipt-meta{color:var(--muted);font-size:13px}
+
