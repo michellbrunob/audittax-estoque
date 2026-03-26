@@ -379,8 +379,17 @@ const parseNativePdfReceiptText = (text, items) => {
   };
 };
 const extractAccessKey = (raw) => String(raw || '').replace(/\D/g, '').match(/\d{44}/)?.[0] || '';
-// Corrige erros comuns de OCR em dígitos (ex: ] → 1, O → 0, l → 1, I → 1, S → 5, B → 8)
-const fixOcrDigits = (text) => String(text || '').replace(/[OoQD]/g, '0').replace(/[IilL\]|!]/g, '1').replace(/[Zz]/g, '2').replace(/[S\$]/g, '5').replace(/[Bb]/g, '8').replace(/[gq]/g, '9');
+// Corrige erros OCR APENAS em trechos que já são predominantemente dígitos
+// Ex: "600]" → "6001", "55l2" → "5512". NÃO aplica em texto com letras.
+const fixOcrInDigitRun = (text) => String(text || '').replace(/\]/g, '1').replace(/[|!]/g, '1').replace(/[[\]]/g, '1');
+
+// Verifica se uma linha é predominantemente dígitos (>60% dos caracteres não-espaço são dígitos)
+const isDigitLine = (line) => {
+  const chars = line.replace(/\s/g, '');
+  if (chars.length < 20) return false;
+  const digitCount = (chars.match(/\d/g) || []).length;
+  return digitCount / chars.length > 0.6;
+};
 
 const extractAccessKeyCandidates = (raw) => {
   const text = String(raw || '');
@@ -393,16 +402,18 @@ const extractAccessKeyCandidates = (raw) => {
 
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
-  // 2. Padrão visual: linha com grupos de 4 dígitos (ex: "1726 0111 1642 4800 ...")
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    // Match: sequência de dígitos/espaços/pontos com pelo menos 40 caracteres
-    const digitGroups = line.match(/[\d][\d\s.,\]\[|!OolIBSgq]{40,}[\d]/);
-    if (digitGroups) {
-      const fixed = fixOcrDigits(digitGroups[0]);
+  // 2. Linhas predominantemente numéricas (padrão visual da chave: "1726 0111 1642 ...")
+  for (const line of lines) {
+    if (isDigitLine(line)) {
+      // Correção leve: só ] | ! que são erros comuns em sequências de dígitos
+      const fixed = fixOcrInDigitRun(line);
       const digits = fixed.replace(/\D/g, '');
       if (digits.length >= 44) {
         prioritized.push(digits.slice(0, 44));
+        // Também testa sliding window dentro da linha
+        for (let j = 1; j <= digits.length - 44; j += 1) {
+          prioritized.push(digits.slice(j, j + 44));
+        }
       }
     }
   }
@@ -410,29 +421,29 @@ const extractAccessKeyCandidates = (raw) => {
   // 3. Busca contextual: linhas próximas a "chave" / "acesso" / "consulte" / "sefaz"
   for (let i = 0; i < lines.length; i += 1) {
     if (/chave|acesso|consulte|sefaz/i.test(lines[i])) {
-      const window = lines.slice(i, i + 6).join(' ');
-      // Versão com correção OCR
-      const fixedWindow = fixOcrDigits(window);
-      const windowDigits = fixedWindow.replace(/\D/g, '');
-      for (let j = 0; j <= windowDigits.length - 44; j += 1) {
-        prioritized.push(windowDigits.slice(j, j + 44));
+      // Pega as próximas linhas e extrai dígitos de cada uma separadamente
+      for (let k = i + 1; k < Math.min(i + 6, lines.length); k += 1) {
+        const nearby = lines[k];
+        if (isDigitLine(nearby)) {
+          const fixed = fixOcrInDigitRun(nearby);
+          const digits = fixed.replace(/\D/g, '');
+          if (digits.length >= 44) {
+            prioritized.push(digits.slice(0, 44));
+          }
+        }
       }
-      // Versão sem correção (caso o OCR esteja correto)
-      const rawWindowDigits = window.replace(/\D/g, '');
-      for (let j = 0; j <= rawWindowDigits.length - 44; j += 1) {
-        prioritized.push(rawWindowDigits.slice(j, j + 44));
+      // Também tenta juntar dígitos de todas as linhas próximas
+      const windowDigits = lines.slice(i, i + 6).join(' ').replace(/\D/g, '');
+      for (let j = 0; j <= windowDigits.length - 44; j += 1) {
+        others.add(windowDigits.slice(j, j + 44));
       }
     }
   }
 
-  // 4. Sliding window no texto inteiro (com e sem correção OCR)
+  // 4. Sliding window no texto inteiro (SEM correção agressiva)
   const digitsOnly = text.replace(/\D/g, '');
-  const fixedDigitsOnly = fixOcrDigits(text).replace(/\D/g, '');
   for (let i = 0; i <= digitsOnly.length - 44; i += 1) {
     others.add(digitsOnly.slice(i, i + 44));
-  }
-  for (let i = 0; i <= fixedDigitsOnly.length - 44; i += 1) {
-    others.add(fixedDigitsOnly.slice(i, i + 44));
   }
 
   return [...new Set([...prioritized, ...others])];
