@@ -10,3 +10,5 @@
 
 .filters-row{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end}.receipt-item{border:1px solid var(--line);border-radius:var(--radius-sm);padding:16px;background:var(--panel);display:grid;gap:10px}.receipt-item-head,.receipt-meta{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.receipt-meta{color:var(--muted);font-size:13px}
 
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px}.modal-content{background:var(--panel);border-radius:var(--radius);box-shadow:0 24px 48px rgba(0,0,0,.2);padding:24px;max-width:900px;width:100%;max-height:90vh;overflow-y:auto}.receipt-viewer{margin-top:12px;display:flex;justify-content:center;align-items:center;background:var(--neutral-soft);border-radius:var(--radius-sm);padding:12px;min-height:200px}
+
