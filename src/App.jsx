@@ -5,6 +5,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
+// Chave do localStorage legado — usada apenas na migração para SQLite
 const STORAGE_KEY = 'controle-limpeza-react-v1';
 const todayString = () => new Date().toISOString().split('T')[0];
 const formatDate = (value) => new Date(`${value}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -799,16 +800,49 @@ const screens = [
 ];
 
 function App() {
-  const [state, setState] = useState(() => { try { const stored = localStorage.getItem(STORAGE_KEY); return stored ? hydrateState(JSON.parse(stored)) : initialState; } catch { localStorage.removeItem(STORAGE_KEY); return initialState; } });
+  const [state, setState] = useState(initialState);
+  const [dbReady, setDbReady] = useState(false);
   const [screen, setScreen] = useState('dashboard');
   const [flash, setFlash] = useState(null);
   const [historyFilter, setHistoryFilter] = useState('');
   const [priceFilter, setPriceFilter] = useState('');
-  // receiptPassword e receiptOpen removidos — comprovantes sem senha
   const [reader, setReader] = useState({ loading: false, error: '', fileName: '', fileDataUrl: '', fileMimeType: '', preview: '', parsed: null, draftItems: [], supplierId: '', accessKey: '', queryUrl: '' });
   const timer = useRef(null);
+  const readerFileRef = useRef(null); // guarda File original para upload ao backend
 
-  useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }, [state]);
+  // ─── Carga inicial: SQLite → state (com migração automática do localStorage) ───
+  useEffect(() => {
+    import('./api.js').then(({ default: api }) => {
+      window.__api = api; // disponibiliza globalmente para CRUD
+      api.getState().then((serverState) => {
+        const hasData = serverState && (serverState.items?.length > 0 || serverState.suppliers?.length > 0 || serverState.receipts?.length > 0);
+        if (hasData) {
+          setState(hydrateState(serverState));
+          setDbReady(true);
+        } else {
+          // Tenta migrar localStorage
+          const stored = localStorage.getItem(STORAGE_KEY);
+          if (stored) {
+            try {
+              const parsed = JSON.parse(stored);
+              api.migrate(parsed).then(() => api.getState()).then((fresh) => {
+                setState(hydrateState(fresh));
+                localStorage.removeItem(STORAGE_KEY);
+                setDbReady(true);
+              }).catch(() => { setState(hydrateState(parsed)); setDbReady(true); });
+            } catch { setDbReady(true); }
+          } else { setDbReady(true); }
+        }
+      }).catch(() => {
+        // Fallback: backend indisponível, tenta localStorage
+        try {
+          const stored = localStorage.getItem(STORAGE_KEY);
+          if (stored) setState(hydrateState(JSON.parse(stored)));
+        } catch { /* noop */ }
+        setDbReady(true);
+      });
+    });
+  }, []);
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const itemsById = useMemo(() => Object.fromEntries(state.items.map((item) => [item.id, item])), [state.items]);
@@ -833,56 +867,50 @@ function App() {
 
   const showFlash = (message, tone = 'success') => { setFlash({ message, tone }); clearTimeout(timer.current); timer.current = setTimeout(() => setFlash(null), 3200); };
 
-  const appendState = (updater, successMessage) => { setState((current) => updater(current)); if (successMessage) showFlash(successMessage); };
+  const showFlashErr = (e) => showFlash(e?.error || e?.message || 'Erro na operacao.', 'error');
+  // Helper: chama API e recarrega state completo
+  const apiCall = (fn, successMsg) => fn.then(() => window.__api.getState()).then((fresh) => { setState(hydrateState(fresh)); if (successMsg) showFlash(successMsg); }).catch(showFlashErr);
 
-  const addItem = (payload) => appendState((current) => ({ ...current, items: [...current.items, { id: current.counters.item, ...payload }], counters: { ...current.counters, item: current.counters.item + 1 } }), 'Item cadastrado.');
-  const updateItem = (itemId, payload) => appendState((current) => ({ ...current, items: current.items.map((item) => item.id === itemId ? { ...item, ...payload } : item) }), 'Item atualizado.');
+  const addItem = (payload) => apiCall(window.__api.addItem(payload), 'Item cadastrado.');
+  const updateItem = (itemId, payload) => apiCall(window.__api.updateItem(itemId, payload), 'Item atualizado.');
   const deleteItem = (itemId) => {
     const usageCount = state.movements.filter((m) => m.itemId === itemId).length + state.priceHistory.filter((p) => p.itemId === itemId).length;
     if (usageCount > 0 && !window.confirm(`Este item tem ${usageCount} registro(s) de movimentacao/preco. Deseja excluir mesmo assim?`)) return;
-    appendState((current) => ({ ...current, items: current.items.filter((item) => item.id !== itemId) }), 'Item excluido.');
+    apiCall(window.__api.deleteItem(itemId), 'Item excluido.');
   };
 
   const registerMovement = (payload) => {
     const item = itemsById[payload.itemId];
     if (payload.type === 'saida' && payload.quantity > item.quantity) return showFlash('Quantidade maior que o estoque atual.', 'error');
-    appendState((current) => ({
-      ...current,
-      items: current.items.map((entry) => entry.id === payload.itemId ? { ...entry, quantity: Number((entry.quantity + (payload.type === 'saida' ? -payload.quantity : payload.quantity)).toFixed(2)) } : entry),
-      movements: [...current.movements, { id: current.counters.movement, ...payload }],
-      counters: { ...current.counters, movement: current.counters.movement + 1 }
-    }), `${payload.type === 'entrada' ? 'Entrada' : 'Saida'} registrada.`);
+    apiCall(window.__api.registerMovement(payload), `${payload.type === 'entrada' ? 'Entrada' : 'Saida'} registrada.`);
   };
 
-  const registerExtra = (payload) => appendState((current) => {
-    const supplierName = current.suppliers.find((supplier) => supplier.id === Number(payload.supplierId))?.name || payload.location || '';
-    return {
-      ...current,
-      items: current.items.map((entry) => entry.id === payload.itemId ? { ...entry, quantity: Number((entry.quantity + payload.quantity).toFixed(2)) } : entry),
-      extraPurchases: [...current.extraPurchases, { id: current.counters.extraPurchase, ...payload, location: supplierName }],
-      movements: [...current.movements, { id: current.counters.movement, type: 'avulso', itemId: payload.itemId, quantity: payload.quantity, date: payload.date, notes: `Reposicao avulsa: ${payload.reason}` }],
-      counters: { ...current.counters, extraPurchase: current.counters.extraPurchase + 1, movement: current.counters.movement + 1 }
-    };
-  }, 'Reposicao avulsa registrada.');
+  const registerExtra = (payload) => {
+    const supplierName = state.suppliers.find((s) => s.id === Number(payload.supplierId))?.name || payload.location || '';
+    // Backend: inserts extra + movement + updates item qty
+    apiCall(window.__api.registerExtra({ ...payload, location: supplierName }), 'Reposicao avulsa registrada.');
+  };
 
-  const addPrice = (payload) => appendState((current) => ({ ...current, priceHistory: [...current.priceHistory, { id: current.counters.price, ...payload, market: current.suppliers.find((supplier) => supplier.id === Number(payload.supplierId))?.name || payload.market || 'Fornecedor nao informado' }], counters: { ...current.counters, price: current.counters.price + 1 } }), 'Preco registrado.');
-  const addReceipt = (payload) => appendState((current) => ({ ...current, receipts: [...current.receipts, { id: current.counters.receipt, ...payload }], counters: { ...current.counters, receipt: current.counters.receipt + 1 } }), 'Comprovante salvo.');
-  const deleteReceipt = (id) => appendState((current) => ({ ...current, receipts: current.receipts.filter((r) => r.id !== id) }), 'Comprovante excluido.');
-  const addSupplier = (payload) => appendState((current) => ({ ...current, suppliers: [...current.suppliers, { id: current.counters.supplier, ...payload }], counters: { ...current.counters, supplier: current.counters.supplier + 1 } }), 'Fornecedor cadastrado.');
-  const updateSupplier = (supplierId, payload) => appendState((current) => ({
-    ...current,
-    suppliers: current.suppliers.map((supplier) => supplier.id === supplierId ? { ...supplier, ...payload } : supplier),
-    priceHistory: current.priceHistory.map((entry) => entry.supplierId === supplierId ? { ...entry, market: payload.name || entry.market } : entry),
-    extraPurchases: current.extraPurchases.map((entry) => entry.supplierId === supplierId ? { ...entry, location: payload.name || entry.location } : entry)
-  }), 'Fornecedor atualizado.');
+  const addPrice = (payload) => {
+    const market = state.suppliers.find((s) => s.id === Number(payload.supplierId))?.name || payload.market || 'Fornecedor nao informado';
+    apiCall(window.__api.addPrice({ ...payload, market }), 'Preco registrado.');
+  };
+  const addReceipt = (payload, file) => apiCall(window.__api.addReceipt(payload, file), 'Comprovante salvo.');
+  const deleteReceipt = (id) => apiCall(window.__api.deleteReceipt(id), 'Comprovante excluido.');
+  const addSupplier = (payload) => apiCall(window.__api.addSupplier(payload), 'Fornecedor cadastrado.');
+  const updateSupplier = (supplierId, payload) => apiCall(window.__api.updateSupplier(supplierId, payload), 'Fornecedor atualizado.');
   const deleteSupplier = (supplierId) => {
-    const usageCount = state.priceHistory.filter((entry) => entry.supplierId === supplierId).length + state.extraPurchases.filter((entry) => entry.supplierId === supplierId).length;
-    if (usageCount) return showFlash('Este fornecedor ja possui historico vinculado e nao pode ser excluido.', 'error');
-    appendState((current) => ({ ...current, suppliers: current.suppliers.filter((supplier) => supplier.id !== supplierId) }), 'Fornecedor excluido.');
+    window.__api.deleteSupplier(supplierId).then((r) => {
+      if (r.error) return showFlash('Este fornecedor ja possui historico vinculado e nao pode ser excluido.', 'error');
+      return window.__api.getState().then((fresh) => { setState(hydrateState(fresh)); showFlash('Fornecedor excluido.'); });
+    }).catch(showFlashErr);
   };
-  const updateCycle = (payload) => appendState((current) => ({ ...current, cycle: payload }), 'Ciclo atualizado.');
-  const saveSettings = (payload) => appendState((current) => ({ ...current, settings: { ...current.settings, ...payload } }), 'Configuracoes salvas.');
-  const updateConsumption = (itemId, weeklyConsumption) => setState((current) => ({ ...current, items: current.items.map((item) => item.id === itemId ? { ...item, weeklyConsumption } : item) }));
+  const updateCycle = (payload) => apiCall(window.__api.updateCycle(payload), 'Ciclo atualizado.');
+  const saveSettings = (payload) => apiCall(window.__api.saveSettings(payload), 'Configuracoes salvas.');
+  const updateConsumption = (itemId, weeklyConsumption) => {
+    window.__api.updateConsumption(itemId, weeklyConsumption).catch(() => {});
+    setState((current) => ({ ...current, items: current.items.map((item) => item.id === itemId ? { ...item, weeklyConsumption } : item) }));
+  };
 
   // Resolve fornecedor pendente quando suppliers atualiza após cadastro
   useEffect(() => {
@@ -893,6 +921,7 @@ function App() {
   }, [state.suppliers, reader._pendingSupplierName]);
 
   const analyzeReceipt = async (file) => {
+    readerFileRef.current = file; // Guarda referência para upload posterior
     let previewDataUrl = '';
     let sourceForOcr = file;
     let fileDataUrl = '';
@@ -1008,42 +1037,55 @@ function App() {
 
   const confirmReaderImport = () => {
     if (!reader.draftItems?.length) return;
-    appendState((current) => {
-      const next = structuredClone(current);
-      const market = next.suppliers.find((supplier) => supplier.id === Number(reader.supplierId || 0))?.name || reader.parsed.mercado || 'Mercado nao identificado';
-      const date = reader.parsed.data || todayString();
-      const importedAt = timestampString();
-      const importedItems = reader.draftItems.filter((entry) => entry.include && entry.nome);
-      const importedTotal = importedItems.reduce((sum, entry) => sum + computeLineTotal(entry.quantidade, entry.preco_unitario, entry.unidade), 0);
-      importedItems.forEach((entry) => {
-        const matchName = slug(entry.item_cadastrado || entry.nome);
-        let item = next.items.find((candidate) => slug(candidate.name) === matchName);
-        if (!item) { item = { id: next.counters.item, name: entry.nome, unit: entry.unidade || 'un', quantity: 0, minStock: 1, weeklyConsumption: 0 }; next.items.push(item); next.counters.item += 1; }
-        item.quantity = Number((item.quantity + Number(entry.quantidade || 0)).toFixed(2));
-        next.movements.push({ id: next.counters.movement, type: 'entrada', itemId: item.id, quantity: Number(entry.quantidade || 0), date, notes: `NF - ${market}` });
-        next.counters.movement += 1;
-        if (entry.preco_unitario) { next.priceHistory.push({ id: next.counters.price, itemId: item.id, supplierId: Number(reader.supplierId || 0) || undefined, market, price: Number(entry.preco_unitario), date }); next.counters.price += 1; }
-      });
-      next.receipts.push({
-        id: next.counters.receipt,
-        title: `Cupom ${market}`,
-        value: Number(reader.parsed?.total || importedTotal || 0),
-        date,
-        importedAt,
-        notes: `Importado pelo modulo de entrada com ${importedItems.length} item(ns).`,
-        supplierId: Number(reader.supplierId || 0) || undefined,
-        fileName: reader.fileName || `comprovante-${date}`,
-        mimeType: reader.fileMimeType || '',
-        dataUrl: reader.fileDataUrl || '',
-        preview: reader.preview || '',
-        accessKey: reader.accessKey || reader.parsed?.accessKey || '',
-        queryUrl: reader.queryUrl || reader.parsed?.queryUrl || '',
-        source: reader.parsed?.sourceMode === 'xml' ? 'xml-fiscal' : reader.parsed?.sourceMode === 'pdf-texto' ? 'pdf-texto' : 'entrada-ocr'
-      });
-      next.counters.receipt += 1;
-      return next;
-    }, 'Itens importados do comprovante.');
+    const market = state.suppliers.find((s) => s.id === Number(reader.supplierId || 0))?.name || reader.parsed?.mercado || 'Mercado nao identificado';
+    const date = reader.parsed?.data || todayString();
+    const importedItems = reader.draftItems.filter((entry) => entry.include && entry.nome);
+    const importedTotal = importedItems.reduce((sum, entry) => sum + computeLineTotal(entry.quantidade, entry.preco_unitario, entry.unidade), 0);
+
+    // Mapeia itens: vincula a existente ou cria novo
+    const items = importedItems.map((entry) => {
+      const matchName = slug(entry.item_cadastrado || entry.nome);
+      const existing = state.items.find((candidate) => slug(candidate.name) === matchName);
+      return {
+        import: true,
+        linkedItemId: existing?.id || null,
+        name: entry.nome,
+        unit: entry.unidade || 'un',
+        quantity: Number(entry.quantidade || 0),
+        unitPrice: Number(entry.preco_unitario || 0),
+      };
+    });
+
+    const payload = {
+      items,
+      date,
+      fileName: reader.fileName || `comprovante-${date}`,
+      title: `Cupom ${market}`,
+      totalValue: Number(reader.parsed?.total || importedTotal || 0),
+      notes: `Importado pelo modulo de entrada com ${importedItems.length} item(ns).`,
+      supplierId: Number(reader.supplierId || 0) || null,
+      mimeType: reader.fileMimeType || '',
+      accessKey: reader.accessKey || reader.parsed?.accessKey || '',
+      queryUrl: reader.queryUrl || reader.parsed?.queryUrl || '',
+      source: reader.parsed?.sourceMode === 'xml' ? 'xml-fiscal' : reader.parsed?.sourceMode === 'pdf-texto' ? 'pdf-texto' : 'entrada-ocr',
+    };
+
+    // Envia ao backend com arquivo
+    const fd = new FormData();
+    fd.append('data', JSON.stringify(payload));
+    if (readerFileRef.current) fd.append('file', readerFileRef.current);
+
+    const API_BASE = window.__api ? `http://${window.location.hostname}:3333` : 'http://127.0.0.1:3333';
+    fetch(`${API_BASE}/api/import-receipt`, { method: 'POST', body: fd })
+      .then((r) => r.json())
+      .then((result) => {
+        if (result.state) setState(hydrateState(result.state));
+        showFlash('Itens importados do comprovante.');
+      })
+      .catch((e) => showFlash(e?.message || 'Erro ao importar.', 'error'));
+
     setReader({ loading: false, error: '', fileName: '', fileDataUrl: '', fileMimeType: '', preview: '', parsed: null, draftItems: [], supplierId: '', accessKey: '', queryUrl: '' });
+    readerFileRef.current = null;
   };
 
   const cycleProgress = Math.max(0, Math.min(100, (diffDays(new Date(), new Date(`${state.cycle.lastPurchaseDate}T00:00:00`)) / Number(state.cycle.intervalDays || 1)) * 100));
@@ -1199,14 +1241,16 @@ function ReceiptsPanel({ receipts, onAdd, onDelete, suppliersById }) {
   const viewingReceipt = viewingId !== null ? receipts.find((r) => r.id === viewingId) : null;
   const isPdf = viewingReceipt?.mimeType?.includes('pdf');
   const isImage = viewingReceipt?.mimeType?.startsWith('image/') || (viewingReceipt?.dataUrl && viewingReceipt.dataUrl.startsWith('data:image/'));
+  const fileUrl = viewingReceipt ? (viewingReceipt.filePath ? (window.__api ? window.__api.receiptFileUrl(viewingReceipt.id) : '') : viewingReceipt.dataUrl || '') : '';
+  const hasFile = Boolean(fileUrl || viewingReceipt?.hasFile || viewingReceipt?.dataUrl || viewingReceipt?.filePath);
 
-  return <>{viewingReceipt && viewingReceipt.dataUrl ? <div className="modal-overlay" onClick={() => setViewingId(null)}><div className="modal-content" onClick={(e) => e.stopPropagation()}><div className="panel-head"><div><h3>{viewingReceipt.title}</h3><p>{formatDate(viewingReceipt.date)} - {currency(viewingReceipt.value)}</p></div><button className="ghost-button" onClick={() => setViewingId(null)}>Fechar</button></div><div className="receipt-viewer">{isPdf ? <iframe src={viewingReceipt.dataUrl} title="Comprovante PDF" style={{ width: '100%', height: '70vh', border: 'none', borderRadius: '8px' }} /> : isImage ? <img src={viewingReceipt.dataUrl} alt="Comprovante" style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: '8px' }} /> : <p>Formato nao suportado para visualizacao.</p>}</div><div className="actions-row" style={{ marginTop: '1rem' }}><button className="primary-button" type="button" onClick={() => downloadDataUrl(viewingReceipt.dataUrl, viewingReceipt.fileName || `comprovante-${viewingReceipt.date}`)}>Baixar arquivo</button><button className="ghost-button" onClick={() => setViewingId(null)}>Fechar</button></div></div></div> : null}
+  return <>{viewingReceipt && hasFile ? <div className="modal-overlay" onClick={() => setViewingId(null)}><div className="modal-content" onClick={(e) => e.stopPropagation()}><div className="panel-head"><div><h3>{viewingReceipt.title}</h3><p>{formatDate(viewingReceipt.date)} - {currency(viewingReceipt.value)}</p></div><button className="ghost-button" onClick={() => setViewingId(null)}>Fechar</button></div><div className="receipt-viewer">{isPdf ? <iframe src={fileUrl} title="Comprovante PDF" style={{ width: '100%', height: '70vh', border: 'none', borderRadius: '8px' }} /> : isImage ? <img src={fileUrl} alt="Comprovante" style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: '8px' }} /> : <p>Formato nao suportado para visualizacao.</p>}</div><div className="actions-row" style={{ marginTop: '1rem' }}><a className="primary-button" href={fileUrl} download={viewingReceipt.fileName || `comprovante-${viewingReceipt.date}`} style={{ textDecoration: 'none', textAlign: 'center' }}>Baixar arquivo</a><button className="ghost-button" onClick={() => setViewingId(null)}>Fechar</button></div></div></div> : null}
 
   <section className="panel"><div className="panel-head"><div><h3>Comprovantes</h3><p>Cupons fiscais organizados por mes — {receipts.length} registro(s) no total</p></div><Badge tone="info">{currency(receipts.reduce((sum, r) => sum + (Number(r.value) || 0), 0))} total</Badge></div></section>
 
-  <section className="panel"><div className="panel-head"><div><h3>Registrar comprovante manual</h3><p>Use quando nao houver importacao pelo modulo de entrada</p></div></div><form className="form-grid" onSubmit={async (event) => { event.preventDefault(); if (!form.title.trim()) return; onAdd({ title: form.title.trim(), value: parseBrlInput(form.valueRaw), date: form.date, importedAt: timestampString(), notes: form.notes, source: 'manual', fileName: form.fileName, fileDataUrl: form.fileDataUrl, dataUrl: form.fileDataUrl, mimeType: form.fileMimeType }); setForm({ title: '', valueDisplay: '', valueRaw: '', date: todayString(), notes: '', fileName: '', fileDataUrl: '', fileMimeType: '' }); }}><Field label="Titulo"><input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Ex: Compra Mercado Central" /></Field><Field label="Valor (R$)"><input inputMode="numeric" value={form.valueDisplay} onChange={(event) => { const raw = event.target.value.replace(/\D/g, ''); setForm({ ...form, valueRaw: raw, valueDisplay: formatBrlInput(raw) }); }} placeholder="R$ 0,00" /></Field><Field label="Data da compra"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><Field label="Arquivo (imagem ou PDF)"><div className="dropzone" style={{ padding: '14px', minHeight: 'auto' }}><input type="file" accept="image/*,.pdf" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; try { const dataUrl = await fileToDataUrl(file); setForm((prev) => ({ ...prev, fileName: file.name, fileDataUrl: dataUrl, fileMimeType: file.type })); } catch {} }} />{form.fileName ? <span style={{ color: 'var(--success)', fontWeight: 500 }}>{form.fileName}</span> : <span>Selecionar arquivo</span>}</div></Field><Field label="Observacao"><input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar comprovante</button>{form.fileName ? <button className="ghost-button" type="button" onClick={() => setForm((prev) => ({ ...prev, fileName: '', fileDataUrl: '', fileMimeType: '' }))}>Remover arquivo</button> : null}</div></form></section>
+  <section className="panel"><div className="panel-head"><div><h3>Registrar comprovante manual</h3><p>Use quando nao houver importacao pelo modulo de entrada</p></div></div><form className="form-grid" onSubmit={async (event) => { event.preventDefault(); if (!form.title.trim()) return; onAdd({ title: form.title.trim(), value: parseBrlInput(form.valueRaw), date: form.date, importedAt: timestampString(), notes: form.notes, source: 'manual', fileName: form.fileName, mimeType: form.fileMimeType }, form._file || null); setForm({ title: '', valueDisplay: '', valueRaw: '', date: todayString(), notes: '', fileName: '', fileDataUrl: '', fileMimeType: '', _file: null }); }}><Field label="Titulo"><input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Ex: Compra Mercado Central" /></Field><Field label="Valor (R$)"><input inputMode="numeric" value={form.valueDisplay} onChange={(event) => { const raw = event.target.value.replace(/\D/g, ''); setForm({ ...form, valueRaw: raw, valueDisplay: formatBrlInput(raw) }); }} placeholder="R$ 0,00" /></Field><Field label="Data da compra"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><Field label="Arquivo (imagem ou PDF)"><div className="dropzone" style={{ padding: '14px', minHeight: 'auto' }}><input type="file" accept="image/*,.pdf" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; setForm((prev) => ({ ...prev, fileName: file.name, fileMimeType: file.type, _file: file })); }} />{form.fileName ? <span style={{ color: 'var(--success)', fontWeight: 500 }}>{form.fileName}</span> : <span>Selecionar arquivo</span>}</div></Field><Field label="Observacao"><input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar comprovante</button>{form.fileName ? <button className="ghost-button" type="button" onClick={() => setForm((prev) => ({ ...prev, fileName: '', fileDataUrl: '', fileMimeType: '' }))}>Remover arquivo</button> : null}</div></form></section>
 
-  {!groups.length ? <section className="panel"><EmptyState text="Nenhum comprovante registrado ainda. Importe pelo modulo de entrada ou registre manualmente acima." /></section> : groups.map((group) => <section className="panel" key={group.label}><div className="panel-head"><div><h3>{group.label}</h3><p>{group.receipts.length} comprovante(s)</p></div><Badge tone="neutral">{currency(group.total)}</Badge></div><div className="stack">{group.receipts.map((receipt) => <article className="receipt-item" key={receipt.id}><div className="receipt-item-head"><div><strong>{receipt.title}</strong><p>{currency(receipt.value)}{receipt.supplierId ? ` - ${suppliersById[receipt.supplierId]?.name || 'Fornecedor'}` : ''}</p></div><Badge tone={receipt.source === 'entrada-ocr' ? 'info' : receipt.source === 'xml-fiscal' ? 'success' : 'neutral'}>{receipt.source === 'entrada-ocr' ? 'OCR' : receipt.source === 'xml-fiscal' ? 'XML' : receipt.source === 'pdf-texto' ? 'PDF' : 'Manual'}</Badge></div><div className="receipt-meta"><span>Data: {formatDate(receipt.date)}</span><span>Importado em: {receipt.importedAt ? formatDateTime(receipt.importedAt) : '-'}</span>{receipt.fileName ? <span>Arquivo: {receipt.fileName}</span> : null}{receipt.accessKey ? <span>Chave: {receipt.accessKey}</span> : null}</div>{receipt.notes ? <p>{receipt.notes}</p> : null}<div className="actions-row">{receipt.dataUrl ? <button className="primary-button" type="button" onClick={() => setViewingId(receipt.id)}>Visualizar</button> : null}{receipt.dataUrl ? <button className="ghost-button" type="button" onClick={() => downloadDataUrl(receipt.dataUrl, receipt.fileName || `comprovante-${receipt.date}`)}>Baixar</button> : null}{receipt.queryUrl ? <button className="ghost-button" type="button" onClick={() => window.open(receipt.queryUrl, '_blank', 'noopener,noreferrer')}>Consultar NFC-e</button> : null}{confirmDeleteId === receipt.id ? <><button className="table-action" style={{ color: '#e74c3c', fontWeight: 'bold' }} type="button" onClick={() => { onDelete(receipt.id); setConfirmDeleteId(null); }}>Confirmar exclusao</button><button className="ghost-button" type="button" onClick={() => setConfirmDeleteId(null)}>Cancelar</button></> : <button className="table-action" type="button" onClick={() => setConfirmDeleteId(receipt.id)}>Excluir</button>}</div></article>)}</div></section>)}</>;
+  {!groups.length ? <section className="panel"><EmptyState text="Nenhum comprovante registrado ainda. Importe pelo modulo de entrada ou registre manualmente acima." /></section> : groups.map((group) => <section className="panel" key={group.label}><div className="panel-head"><div><h3>{group.label}</h3><p>{group.receipts.length} comprovante(s)</p></div><Badge tone="neutral">{currency(group.total)}</Badge></div><div className="stack">{group.receipts.map((receipt) => <article className="receipt-item" key={receipt.id}><div className="receipt-item-head"><div><strong>{receipt.title}</strong><p>{currency(receipt.value)}{receipt.supplierId ? ` - ${suppliersById[receipt.supplierId]?.name || 'Fornecedor'}` : ''}</p></div><Badge tone={receipt.source === 'entrada-ocr' ? 'info' : receipt.source === 'xml-fiscal' ? 'success' : 'neutral'}>{receipt.source === 'entrada-ocr' ? 'OCR' : receipt.source === 'xml-fiscal' ? 'XML' : receipt.source === 'pdf-texto' ? 'PDF' : 'Manual'}</Badge></div><div className="receipt-meta"><span>Data: {formatDate(receipt.date)}</span><span>Importado em: {receipt.importedAt ? formatDateTime(receipt.importedAt) : '-'}</span>{receipt.fileName ? <span>Arquivo: {receipt.fileName}</span> : null}{receipt.accessKey ? <span>Chave: {receipt.accessKey}</span> : null}</div>{receipt.notes ? <p>{receipt.notes}</p> : null}<div className="actions-row">{(receipt.filePath || receipt.hasFile || receipt.dataUrl) ? <button className="primary-button" type="button" onClick={() => setViewingId(receipt.id)}>Visualizar</button> : null}{(receipt.filePath || receipt.hasFile || receipt.dataUrl) ? <a className="ghost-button" href={receipt.filePath && window.__api ? window.__api.receiptFileUrl(receipt.id) : receipt.dataUrl} download={receipt.fileName || `comprovante-${receipt.date}`} style={{ textDecoration: 'none', textAlign: 'center' }}>Baixar</a> : null}{receipt.queryUrl ? <button className="ghost-button" type="button" onClick={() => window.open(receipt.queryUrl, '_blank', 'noopener,noreferrer')}>Consultar NFC-e</button> : null}{confirmDeleteId === receipt.id ? <><button className="table-action" style={{ color: '#e74c3c', fontWeight: 'bold' }} type="button" onClick={() => { onDelete(receipt.id); setConfirmDeleteId(null); }}>Confirmar exclusao</button><button className="ghost-button" type="button" onClick={() => setConfirmDeleteId(null)}>Cancelar</button></> : <button className="table-action" type="button" onClick={() => setConfirmDeleteId(receipt.id)}>Excluir</button>}</div></article>)}</div></section>)}</>;
 }
 function SettingsPanel({ state, nextPurchaseDate, onSaveCycle, onSaveSettings, onUpdateConsumption }) { const [cycle, setCycle] = useState(state.cycle); const [settings, setSettings] = useState(state.settings); useEffect(() => { setCycle(state.cycle); setSettings(state.settings); }, [state.cycle, state.settings]); return <><section className="panel"><div className="panel-head"><div><h3>Configuracao do ciclo</h3><p>Ultima compra geral e intervalo fixo</p></div><Badge tone="info">Proxima: {formatDate(nextPurchaseDate.toISOString().split('T')[0])}</Badge></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSaveCycle({ lastPurchaseDate: cycle.lastPurchaseDate, intervalDays: Number(cycle.intervalDays) }); }}><Field label="Ultima compra geral"><input type="date" value={cycle.lastPurchaseDate} onChange={(event) => setCycle({ ...cycle, lastPurchaseDate: event.target.value })} /></Field><Field label="Ciclo em dias"><input type="number" min="1" value={cycle.intervalDays} onChange={(event) => setCycle({ ...cycle, intervalDays: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar ciclo</button></div></form></section><section className="panel"><div className="panel-head"><div><h3>Consumo semanal por item</h3><p>Ajuste fino das estimativas de duracao</p></div></div><div className="table-wrap"><table><thead><tr><th>Item</th><th>Unidade</th><th>Consumo semanal</th><th>Estoque atual</th></tr></thead><tbody>{state.items.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.unit}</td><td><input type="number" min="0" step="0.1" value={item.weeklyConsumption} onChange={(event) => onUpdateConsumption(item.id, Number(event.target.value))} /></td><td>{item.quantity} {item.unit}</td></tr>)}</tbody></table></div></section></>; }
 function NewItemForm({ onSubmit }) { const [form, setForm] = useState({ name: '', unit: 'un', quantity: '', minStock: '', weeklyConsumption: '' }); return <><div className="panel-head"><div><h3>Novo item</h3><p>Cadastro rapido para ampliar o estoque base</p></div></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); if (!form.name.trim()) return; onSubmit({ name: form.name.trim(), unit: normalizeUnit(form.unit) || 'un', quantity: Number(form.quantity || 0), minStock: Number(form.minStock || 0), weeklyConsumption: Number(form.weeklyConsumption || 0) }); setForm({ name: '', unit: 'un', quantity: '', minStock: '', weeklyConsumption: '' }); }}><Field label="Nome"><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><Field label="Unidade"><select value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })}>{UNIT_OPTIONS.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}</select></Field><Field label="Quantidade inicial"><input type="number" min="0" step="0.01" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} /></Field><Field label="Estoque minimo"><input type="number" min="0" step="0.01" value={form.minStock} onChange={(event) => setForm({ ...form, minStock: event.target.value })} /></Field><Field label="Consumo semanal"><input type="number" min="0" step="0.01" value={form.weeklyConsumption} onChange={(event) => setForm({ ...form, weeklyConsumption: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Cadastrar item</button></div></form></>; }

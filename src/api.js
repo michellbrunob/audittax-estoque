@@ -1,0 +1,66 @@
+// API wrapper — comunica com backend SQLite (Express:3333)
+const API_BASE = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+  ? 'http://127.0.0.1:3333'
+  : `http://${window.location.hostname}:3333`;
+
+const json = (method, path, body) =>
+  fetch(`${API_BASE}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body != null ? JSON.stringify(body) : undefined,
+  }).then((r) => {
+    if (!r.ok) return r.json().then((e) => Promise.reject(e));
+    return r.json();
+  });
+
+const api = {
+  // Estado completo (carga inicial)
+  getState: () => json('GET', '/api/state'),
+
+  // Migração localStorage → SQLite (uma vez)
+  migrate: (data) => json('POST', '/api/migrate', data),
+
+  // Items
+  addItem: (p) => json('POST', '/api/items', p),
+  updateItem: (id, p) => json('PUT', `/api/items/${id}`, p),
+  deleteItem: (id) => json('DELETE', `/api/items/${id}`),
+  updateConsumption: (id, wc) => json('PATCH', `/api/items/${id}/consumption`, { weeklyConsumption: wc }),
+
+  // Movements
+  registerMovement: (p) => json('POST', '/api/movements', p),
+
+  // Prices
+  addPrice: (p) => json('POST', '/api/prices', p),
+
+  // Extra Purchases
+  registerExtra: (p) => json('POST', '/api/extras', p),
+
+  // Receipts
+  addReceipt: (data, file) => {
+    const fd = new FormData();
+    fd.append('data', JSON.stringify(data));
+    if (file) fd.append('file', file);
+    return fetch(`${API_BASE}/api/receipts`, { method: 'POST', body: fd }).then((r) => r.json());
+  },
+  deleteReceipt: (id) => json('DELETE', `/api/receipts/${id}`),
+  receiptFileUrl: (id) => `${API_BASE}/api/receipts/${id}/file`,
+
+  // Suppliers
+  addSupplier: (p) => json('POST', '/api/suppliers', p),
+  updateSupplier: (id, p) => json('PUT', `/api/suppliers/${id}`, p),
+  deleteSupplier: (id) => json('DELETE', `/api/suppliers/${id}`),
+
+  // Cycle & Settings
+  updateCycle: (p) => json('PUT', '/api/cycle', p),
+  saveSettings: (p) => json('PUT', '/api/settings', p),
+
+  // Batch Import (confirmReaderImport)
+  importReceipt: (data, file) => {
+    const fd = new FormData();
+    fd.append('data', JSON.stringify(data));
+    if (file) fd.append('file', file);
+    return fetch(`${API_BASE}/api/import-receipt`, { method: 'POST', body: fd }).then((r) => r.json());
+  },
+};
+
+export default api;

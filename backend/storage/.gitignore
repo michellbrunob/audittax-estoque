@@ -1,0 +1,6 @@
+# Ignora banco de dados e arquivos de comprovantes
+*.db
+*.db-wal
+*.db-shm
+receipts/
+!.gitignore

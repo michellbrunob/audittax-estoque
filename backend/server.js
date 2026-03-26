@@ -916,8 +916,87 @@ app.post('/nfce/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`API NFC-e pronta em http://localhost:${PORT}`);
+// ─────────────────────────────────────────────
+// REST API — Persistência SQLite
+// ─────────────────────────────────────────────
+const Q = require('./db/queries.js');
+const { RECEIPTS_DIR } = Q;
+const receiptUpload = multer({ storage: multer.diskStorage({
+  destination: (_, __, cb) => cb(null, RECEIPTS_DIR),
+  filename: (_, file, cb) => { const ext = path.extname(file.originalname) || '.bin'; cb(null, `${Date.now()}${ext}`); }
+}) });
+
+// Estado completo (carga inicial)
+app.get('/api/state', (_, res) => { try { res.json(Q.getFullState()); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+// Migração do localStorage
+app.post('/api/migrate', (req, res) => { try { const result = Q.migrateFromLocalStorage(req.body); res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+// ─── Items ───
+app.get('/api/items', (_, res) => res.json(Q.getAllItems()));
+app.post('/api/items', (req, res) => { try { res.json(Q.insertItem(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.put('/api/items/:id', (req, res) => { try { res.json(Q.updateItem(Number(req.params.id), req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.delete('/api/items/:id', (req, res) => { try { Q.deleteItem(Number(req.params.id)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.patch('/api/items/:id/consumption', (req, res) => { try { Q.updateItemConsumption(Number(req.params.id), Number(req.body.weeklyConsumption)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+
+// ─── Movements ───
+app.get('/api/movements', (_, res) => res.json(Q.getAllMovements()));
+app.post('/api/movements', (req, res) => { try { res.json(Q.insertMovement(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+
+// ─── Prices ───
+app.get('/api/prices', (_, res) => res.json(Q.getAllPrices()));
+app.post('/api/prices', (req, res) => { try { res.json(Q.insertPrice(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+
+// ─── Extra Purchases ───
+app.get('/api/extras', (_, res) => res.json(Q.getAllExtras()));
+app.post('/api/extras', (req, res) => { try { res.json(Q.insertExtra(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+
+// ─── Receipts ───
+app.get('/api/receipts', (_, res) => res.json(Q.getAllReceipts()));
+app.post('/api/receipts', receiptUpload.single('file'), (req, res) => {
+  try {
+    const data = req.body.data ? JSON.parse(req.body.data) : req.body;
+    const filePath = req.file ? req.file.filename : '';
+    res.json(Q.insertReceipt(data, filePath));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/receipts/:id/file', (req, res) => {
+  try {
+    const receipt = Q.getReceipt(Number(req.params.id));
+    if (!receipt?.filePath) return res.status(404).json({ error: 'Arquivo nao encontrado' });
+    const fullPath = path.join(RECEIPTS_DIR, receipt.filePath);
+    if (!require('fs').existsSync(fullPath)) return res.status(404).json({ error: 'Arquivo nao existe em disco' });
+    res.setHeader('Content-Type', receipt.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${receipt.fileName || 'comprovante'}"`);
+    res.sendFile(fullPath);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/receipts/:id', (req, res) => { try { Q.deleteReceipt(Number(req.params.id)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+
+// ─── Suppliers ───
+app.get('/api/suppliers', (_, res) => res.json(Q.getAllSuppliers()));
+app.post('/api/suppliers', (req, res) => { try { res.json(Q.insertSupplier(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.put('/api/suppliers/:id', (req, res) => { try { res.json(Q.updateSupplier(Number(req.params.id), req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.delete('/api/suppliers/:id', (req, res) => { try { const r = Q.deleteSupplier(Number(req.params.id)); if (r.error) return res.status(409).json(r); res.json(r); } catch (e) { res.status(400).json({ error: e.message }); } });
+
+// ─── Cycle & Settings ───
+app.put('/api/cycle', (req, res) => { try { res.json(Q.updateCycle(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.put('/api/settings', (req, res) => { try { res.json(Q.updateSettings(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+
+// ─── Batch Import (confirmReaderImport) ───
+app.post('/api/import-receipt', receiptUpload.single('file'), (req, res) => {
+  try {
+    const data = req.body.data ? JSON.parse(req.body.data) : req.body;
+    const filePath = req.file ? req.file.filename : '';
+    const result = Q.batchImportReceipt(data, filePath);
+    // Retorna estado atualizado junto com resultado
+    result.state = Q.getFullState();
+    res.json(result);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`API NFC-e + REST pronta em http://0.0.0.0:${PORT}`);
 });
 
 
