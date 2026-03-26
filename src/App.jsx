@@ -624,42 +624,18 @@ const chooseBestAccessKey = ({ ocrText, qrRawValue }) => {
     return { key: ocrCandidates[0], source: 'OCR', valid: true, candidates: ocrRawCandidates };
   }
 
-  // 4. Fallback: candidatas nao validadas (melhor que nada)
-  if (qrRawCandidates.length) return { key: qrRawCandidates[0], source: 'QR Code', valid: false, candidates: qrRawCandidates };
+  // 4. Fallback: apenas candidatas que parecem NFC-e (posição 20-21 = "65")
+  // Nunca retorna sequências aleatórias de dígitos como chave
+  const looksLikeNfce = (k) => String(k).length === 44 && String(k).slice(20, 22) === '65';
+  const allCandidates = [...new Set([...qrRawCandidates, ...ocrRawCandidates])];
+  const nfceCandidates = allCandidates.filter(looksLikeNfce);
 
-  // 5. OCR contextual sem validação - busca perto de "chave", "acesso", "consulte", "sefaz"
-  const lines = String(ocrText || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  for (let i = 0; i < lines.length; i += 1) {
-    if (/chave|acesso|consulte|sefaz/i.test(lines[i])) {
-      const window = lines.slice(i, i + 6).join(' ');
-      const windowDigits = window.replace(/\D/g, '');
-      if (windowDigits.length >= 44) {
-        const candidate = windowDigits.slice(0, 44);
-        console.log('[chooseBestAccessKey] Chave contextual nao validada (perto de "' + lines[i].slice(0, 40) + '"):', candidate);
-        return { key: candidate, source: 'OCR (nao validada)', valid: false, candidates: [candidate, ...ocrRawCandidates.slice(0, 5)] };
-      }
-    }
+  if (nfceCandidates.length) {
+    console.log('[chooseBestAccessKey] Candidata com modelo 65 (sem checksum):', nfceCandidates[0]);
+    return { key: nfceCandidates[0], source: 'OCR (modelo 65)', valid: false, candidates: nfceCandidates };
   }
 
-  // 6. Busca por linha com padrão de grupos de 4 dígitos (formato visual da chave)
-  for (const line of lines) {
-    const match = line.match(/(\d{4}\s+){8,}\d+/);
-    if (match) {
-      const digits = match[0].replace(/\D/g, '');
-      if (digits.length >= 44) {
-        const candidate = digits.slice(0, 44);
-        console.log('[chooseBestAccessKey] Chave por padrao de grupos de 4:', candidate);
-        return { key: candidate, source: 'OCR (padrao visual)', valid: false, candidates: [candidate, ...ocrRawCandidates.slice(0, 5)] };
-      }
-    }
-  }
-
-  // 7. Prioriza primeira candidata do extractAccessKeyCandidates (já vem priorizada)
-  if (ocrRawCandidates.length) {
-    console.log('[chooseBestAccessKey] Usando primeira candidata priorizada:', ocrRawCandidates[0]);
-    return { key: ocrRawCandidates[0], source: 'OCR', valid: false, candidates: ocrRawCandidates };
-  }
-  console.log('[chooseBestAccessKey] Nenhuma chave encontrada');
+  console.log('[chooseBestAccessKey] Nenhuma chave NFC-e encontrada (0 candidatas com modelo 65)');
   return { key: '', source: '', valid: false, candidates: [] };
 };
 const fileToDataUrl = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('Falha ao ler o arquivo.')); reader.readAsDataURL(file); });
