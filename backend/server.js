@@ -13,6 +13,13 @@ const tesseract = require('node-tesseract-ocr');
 const pdfParse = require('pdf-parse');
 const pdfPoppler = require('pdf-poppler');
 
+let readBarcodes;
+const zxingReady = import('zxing-wasm/reader').then((mod) => {
+  readBarcodes = mod.readBarcodes;
+}).catch((err) => {
+  console.warn('[ZXing] Falha ao carregar zxing-wasm:', err.message);
+});
+
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 const PORT = process.env.PORT || 3333;
@@ -70,6 +77,11 @@ async function diagnosticarAmbiente() {
       installHint: tesseractInstalado
         ? ''
         : 'Instale o Tesseract OCR e adicione o executavel ao PATH do Windows.',
+    },
+    zxing: {
+      loaded: Boolean(readBarcodes),
+      requiredFor: ['qrcode-foto', 'qrcode-robusto'],
+      installHint: readBarcodes ? '' : 'zxing-wasm nao carregou corretamente.',
     },
     poppler: {
       installed: popplerInstalado,
@@ -278,6 +290,92 @@ function extrairJson(texto) {
   }
 }
 
+function processarResultadoQr(rawData, fonte) {
+  // Tenta extrair chave via parâmetros da URL primeiro
+  const chaveUrl = extrairChaveDeUrl(rawData);
+  if (chaveUrl) {
+    console.log(`[QR] Chave extraida via URL (${fonte})`);
+    return { raw: rawData, chave: chaveUrl, candidatas: [chaveUrl], erro: '' };
+  }
+
+  // Fallback: busca sequências de 44 dígitos no texto bruto
+  const candidatas = extrairSequencias44(rawData);
+  const digitosPuros = apenasDigitos(rawData);
+  if (digitosPuros.length >= 44) {
+    for (let inicio = 0; inicio <= digitosPuros.length - 44; inicio += 1) {
+      const seq = digitosPuros.slice(inicio, inicio + 44);
+      if (!candidatas.includes(seq)) {
+        candidatas.push(seq);
+      }
+    }
+  }
+
+  const validas = candidatas.filter(validarChaveAcesso);
+  console.log(`[QR] ${fonte}: ${validas.length} chaves validas, ${candidatas.length} candidatas`);
+
+  return {
+    raw: rawData,
+    chave: validas[0] || candidatas[0] || '',
+    candidatas,
+    erro: validas.length || candidatas.length ? '' : 'QR Code lido, mas sem chave identificada.',
+  };
+}
+
+async function lerQrCodeZXing(bufferImagem) {
+  await zxingReady;
+  if (!readBarcodes) return null;
+
+  const metadata = await sharp(bufferImagem).metadata();
+  const { width, height } = metadata;
+  if (!width || !height) return null;
+
+  // Variantes de imagem para tentar com ZXing
+  const variantes = [
+    // 1. Imagem original como PNG (ZXing aceita buffer direto)
+    () => sharp(bufferImagem).png().toBuffer(),
+
+    // 2. Metade inferior recortada (onde fica o QR na NFC-e)
+    () => sharp(bufferImagem)
+      .extract({ left: 0, top: Math.floor(height * 0.45), width, height: Math.floor(height * 0.55) })
+      .png().toBuffer(),
+
+    // 3. Terço inferior + upscale 2x (QR pequeno)
+    () => {
+      const cropH = Math.floor(height * 0.35);
+      return sharp(bufferImagem)
+        .extract({ left: 0, top: height - cropH, width, height: cropH })
+        .resize({ width: width * 2, height: cropH * 2, fit: 'fill' })
+        .sharpen()
+        .png().toBuffer();
+    },
+
+    // 4. Grayscale + normalize (melhor contraste)
+    () => sharp(bufferImagem).greyscale().normalize().png().toBuffer(),
+  ];
+
+  for (let i = 0; i < variantes.length; i += 1) {
+    try {
+      const pngBuffer = await variantes[i]();
+      const results = await readBarcodes(pngBuffer, {
+        formats: ['QRCode'],
+        tryHarder: true,
+        tryRotate: true,
+        tryInvert: true,
+        tryDownscale: true,
+      });
+
+      if (results.length > 0 && results[0].text) {
+        console.log(`[ZXing] QR detectado na variante ${i + 1} de ${variantes.length}`);
+        return processarResultadoQr(results[0].text, `zxing-variante-${i + 1}`);
+      }
+    } catch {
+      // Variante falhou, próxima
+    }
+  }
+
+  return null;
+}
+
 async function tentarJsQR(sharpInstance) {
   const { data, info } = await sharpInstance
     .ensureAlpha()
@@ -286,112 +384,65 @@ async function tentarJsQR(sharpInstance) {
   return jsQR(new Uint8ClampedArray(data), info.width, info.height);
 }
 
+async function lerQrCodeJsQR(bufferImagem) {
+  const metadata = await sharp(bufferImagem).metadata();
+  const { width, height } = metadata;
+  if (!width || !height) return null;
+
+  const tentativas = [
+    () => tentarJsQR(sharp(bufferImagem)),
+    () => tentarJsQR(sharp(bufferImagem).greyscale().normalize().threshold(128)),
+    () => tentarJsQR(
+      sharp(bufferImagem)
+        .extract({ left: 0, top: Math.floor(height * 0.5), width, height: Math.floor(height * 0.5) })
+        .greyscale().normalize().threshold(128)
+    ),
+    () => {
+      const cropH = Math.floor(height * 0.35);
+      return tentarJsQR(
+        sharp(bufferImagem)
+          .extract({ left: 0, top: height - cropH, width, height: cropH })
+          .resize({ width: width * 2, height: cropH * 2, fit: 'fill' })
+          .greyscale().normalize().threshold(128)
+      );
+    },
+    () => tentarJsQR(sharp(bufferImagem).greyscale().negate().normalize().threshold(128)),
+  ];
+
+  for (let i = 0; i < tentativas.length; i += 1) {
+    try {
+      const qr = await tentativas[i]();
+      if (qr?.data) {
+        console.log(`[jsQR] Detectado na tentativa ${i + 1}`);
+        return processarResultadoQr(qr.data, `jsqr-tentativa-${i + 1}`);
+      }
+    } catch {
+      // próxima
+    }
+  }
+
+  return null;
+}
+
 async function lerQrCodeDaImagem(bufferImagem) {
   try {
-    const img = sharp(bufferImagem);
-    const metadata = await img.metadata();
-    const { width, height } = metadata;
-
-    if (!width || !height) {
-      return { raw: '', chave: '', candidatas: [], erro: 'Imagem invalida ou sem dimensoes.' };
+    // 1. Tenta ZXing primeiro (mais robusto para fotos reais)
+    const resultadoZxing = await lerQrCodeZXing(bufferImagem);
+    if (resultadoZxing && (resultadoZxing.chave || resultadoZxing.candidatas.length)) {
+      return resultadoZxing;
     }
 
-    // Pipeline de tentativas — cada uma aplica pré-processamento diferente
-    const tentativas = [
-      // 1. Imagem original
-      () => tentarJsQR(sharp(bufferImagem)),
-
-      // 2. Grayscale + normalize + threshold
-      () => tentarJsQR(sharp(bufferImagem).greyscale().normalize().threshold(128)),
-
-      // 3. Metade inferior (onde QR tipicamente fica na NFC-e) + threshold
-      () => tentarJsQR(
-        sharp(bufferImagem)
-          .extract({ left: 0, top: Math.floor(height * 0.5), width, height: Math.floor(height * 0.5) })
-          .greyscale()
-          .normalize()
-          .threshold(128)
-      ),
-
-      // 4. Terço inferior + upscale 2x + threshold (para QR codes pequenos)
-      () => {
-        const cropH = Math.floor(height * 0.35);
-        const cropTop = height - cropH;
-        return tentarJsQR(
-          sharp(bufferImagem)
-            .extract({ left: 0, top: cropTop, width, height: cropH })
-            .resize({ width: width * 2, height: cropH * 2, fit: 'fill' })
-            .greyscale()
-            .normalize()
-            .threshold(128)
-        );
-      },
-
-      // 5. Imagem invertida + threshold (para QR escuro em fundo claro com problemas)
-      () => tentarJsQR(sharp(bufferImagem).greyscale().negate().normalize().threshold(128)),
-
-      // 6. Threshold mais agressivo (para fotos com pouco contraste)
-      () => tentarJsQR(sharp(bufferImagem).greyscale().normalize().threshold(90)),
-
-      // 7. Metade inferior com threshold menos agressivo
-      () => tentarJsQR(
-        sharp(bufferImagem)
-          .extract({ left: 0, top: Math.floor(height * 0.5), width, height: Math.floor(height * 0.5) })
-          .greyscale()
-          .normalize()
-          .threshold(170)
-      ),
-    ];
-
-    for (let i = 0; i < tentativas.length; i += 1) {
-      try {
-        const qr = await tentativas[i]();
-        if (qr?.data) {
-          console.log(`[QR] Detectado na tentativa ${i + 1} de ${tentativas.length}`);
-
-          // Tenta extrair chave via parâmetros da URL primeiro
-          const chaveUrl = extrairChaveDeUrl(qr.data);
-          if (chaveUrl) {
-            return {
-              raw: qr.data,
-              chave: chaveUrl,
-              candidatas: [chaveUrl],
-              erro: '',
-            };
-          }
-
-          // Fallback: busca sequências de 44 dígitos no texto bruto
-          const candidatas = extrairSequencias44(qr.data);
-          // Também busca nos dígitos puros do QR
-          const digitosPuros = apenasDigitos(qr.data);
-          if (digitosPuros.length >= 44) {
-            for (let inicio = 0; inicio <= digitosPuros.length - 44; inicio += 1) {
-              const seq = digitosPuros.slice(inicio, inicio + 44);
-              if (!candidatas.includes(seq)) {
-                candidatas.push(seq);
-              }
-            }
-          }
-
-          const validas = candidatas.filter(validarChaveAcesso);
-
-          return {
-            raw: qr.data,
-            chave: validas[0] || candidatas[0] || '',
-            candidatas,
-            erro: validas.length || candidatas.length ? '' : 'QR Code lido, mas sem chave identificada.',
-          };
-        }
-      } catch {
-        // Tentativa falhou, prosseguir para a próxima
-      }
+    // 2. Fallback para jsQR com pré-processamento
+    const resultadoJsQR = await lerQrCodeJsQR(bufferImagem);
+    if (resultadoJsQR) {
+      return resultadoJsQR;
     }
 
     return {
       raw: '',
       chave: '',
       candidatas: [],
-      erro: 'QR Code nao encontrado apos multiplas tentativas de preprocessamento.',
+      erro: 'QR Code nao encontrado (ZXing + jsQR com multiplas variantes).',
     };
   } catch (error) {
     return {
