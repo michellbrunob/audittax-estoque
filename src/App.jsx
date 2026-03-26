@@ -379,7 +379,34 @@ const parseNativePdfReceiptText = (text, items) => {
   };
 };
 const extractAccessKey = (raw) => String(raw || '').replace(/\D/g, '').match(/\d{44}/)?.[0] || '';
-const extractAccessKeyCandidates = (raw) => Array.from(new Set(String(raw || '').replace(/\D/g, ' ').match(/\d{44}/g) || []));
+const extractAccessKeyCandidates = (raw) => {
+  const text = String(raw || '');
+  const candidates = new Set();
+
+  // 1. Busca direta por 44 dígitos consecutivos
+  const directMatches = text.match(/\d{44}/g) || [];
+  directMatches.forEach((m) => candidates.add(m));
+
+  // 2. Remove TODOS os não-dígitos e busca janelas de 44 dígitos (chave espaçada)
+  const digitsOnly = text.replace(/\D/g, '');
+  for (let i = 0; i <= digitsOnly.length - 44; i += 1) {
+    candidates.add(digitsOnly.slice(i, i + 44));
+  }
+
+  // 3. Busca contextual: linhas próximas a "chave de acesso"
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/chave\s+de\s+acesso/i.test(lines[i])) {
+      const window = lines.slice(i, i + 5).join(' ');
+      const windowDigits = window.replace(/\D/g, '');
+      for (let j = 0; j <= windowDigits.length - 44; j += 1) {
+        candidates.add(windowDigits.slice(j, j + 44));
+      }
+    }
+  }
+
+  return Array.from(candidates);
+};
 const validateAccessKey = (key) => {
   const normalized = String(key || '').replace(/\D/g, '');
   if (normalized.length !== 44) return false;
@@ -490,9 +517,24 @@ const chooseBestAccessKey = ({ ocrText, qrRawValue }) => {
   const qrRawCandidates = extractAccessKeyCandidates(qrRawValue);
   const qrCandidates = qrRawCandidates.filter(validateAccessKey);
   if (qrCandidates.length) return { key: qrCandidates[0], source: 'QR Code', valid: true, candidates: qrRawCandidates };
+
   const ocrRawCandidates = extractAccessKeyCandidates(ocrText);
   const ocrCandidates = ocrRawCandidates.filter(validateAccessKey);
-  if (ocrCandidates.length) return { key: ocrCandidates[0], source: 'OCR', valid: true, candidates: ocrRawCandidates };
+
+  if (ocrCandidates.length) {
+    // Prioriza chave encontrada perto do rótulo "Chave de Acesso"
+    const lines = String(ocrText || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (/chave\s+de\s+acesso/i.test(lines[i])) {
+        const window = lines.slice(i, i + 5).join(' ');
+        const windowDigits = window.replace(/\D/g, '');
+        const contextKey = ocrCandidates.find((k) => windowDigits.includes(k));
+        if (contextKey) return { key: contextKey, source: 'OCR', valid: true, candidates: ocrRawCandidates };
+      }
+    }
+    return { key: ocrCandidates[0], source: 'OCR', valid: true, candidates: ocrRawCandidates };
+  }
+
   if (qrRawCandidates.length) return { key: qrRawCandidates[0], source: 'QR Code', valid: false, candidates: qrRawCandidates };
   if (ocrRawCandidates.length) return { key: ocrRawCandidates[0], source: 'OCR', valid: false, candidates: ocrRawCandidates };
   return { key: '', source: '', valid: false, candidates: [] };
