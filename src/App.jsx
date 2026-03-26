@@ -379,6 +379,9 @@ const parseNativePdfReceiptText = (text, items) => {
   };
 };
 const extractAccessKey = (raw) => String(raw || '').replace(/\D/g, '').match(/\d{44}/)?.[0] || '';
+// Corrige erros comuns de OCR em dígitos (ex: ] → 1, O → 0, l → 1, I → 1, S → 5, B → 8)
+const fixOcrDigits = (text) => String(text || '').replace(/[OoQD]/g, '0').replace(/[IilL\]|!]/g, '1').replace(/[Zz]/g, '2').replace(/[S\$]/g, '5').replace(/[Bb]/g, '8').replace(/[gq]/g, '9');
+
 const extractAccessKeyCandidates = (raw) => {
   const text = String(raw || '');
   const prioritized = [];
@@ -391,36 +394,47 @@ const extractAccessKeyCandidates = (raw) => {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
   // 2. Padrão visual: linha com grupos de 4 dígitos (ex: "1726 0111 1642 4800 ...")
-  // A chave de NFC-e é impressa assim no cupom
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
-    const digitGroups = line.match(/\d[\d\s.,]{40,}\d/);
+    // Match: sequência de dígitos/espaços/pontos com pelo menos 40 caracteres
+    const digitGroups = line.match(/[\d][\d\s.,\]\[|!OolIBSgq]{40,}[\d]/);
     if (digitGroups) {
-      const digits = digitGroups[0].replace(/\D/g, '');
+      const fixed = fixOcrDigits(digitGroups[0]);
+      const digits = fixed.replace(/\D/g, '');
       if (digits.length >= 44) {
         prioritized.push(digits.slice(0, 44));
       }
     }
   }
 
-  // 3. Busca contextual: linhas próximas a "chave de acesso" / "consulte" / "chave"
+  // 3. Busca contextual: linhas próximas a "chave" / "acesso" / "consulte" / "sefaz"
   for (let i = 0; i < lines.length; i += 1) {
-    if (/chave|consulte.*chave|acesso/i.test(lines[i])) {
+    if (/chave|acesso|consulte|sefaz/i.test(lines[i])) {
       const window = lines.slice(i, i + 6).join(' ');
-      const windowDigits = window.replace(/\D/g, '');
+      // Versão com correção OCR
+      const fixedWindow = fixOcrDigits(window);
+      const windowDigits = fixedWindow.replace(/\D/g, '');
       for (let j = 0; j <= windowDigits.length - 44; j += 1) {
         prioritized.push(windowDigits.slice(j, j + 44));
+      }
+      // Versão sem correção (caso o OCR esteja correto)
+      const rawWindowDigits = window.replace(/\D/g, '');
+      for (let j = 0; j <= rawWindowDigits.length - 44; j += 1) {
+        prioritized.push(rawWindowDigits.slice(j, j + 44));
       }
     }
   }
 
-  // 4. Fallback: remove todos os não-dígitos do texto inteiro e faz sliding window
+  // 4. Sliding window no texto inteiro (com e sem correção OCR)
   const digitsOnly = text.replace(/\D/g, '');
+  const fixedDigitsOnly = fixOcrDigits(text).replace(/\D/g, '');
   for (let i = 0; i <= digitsOnly.length - 44; i += 1) {
     others.add(digitsOnly.slice(i, i + 44));
   }
+  for (let i = 0; i <= fixedDigitsOnly.length - 44; i += 1) {
+    others.add(fixedDigitsOnly.slice(i, i + 44));
+  }
 
-  // Priorizadas primeiro, depois as outras
   return [...new Set([...prioritized, ...others])];
 };
 const validateAccessKey = (key) => {
@@ -542,10 +556,8 @@ const buildOcrVariants = async (dataUrl, qrBox = null) => {
   for (const variant of variants) {
     rendered.push({ label: variant.label, dataUrl: await buildProcessedCrop(dataUrl, variant.crop) });
   }
-  // Variante dedicada para chave de acesso: 58-80% da altura, upscale 3x, SEM threshold duro
-  rendered.push({ label: 'chave-soft-3x', dataUrl: await buildSoftCrop(dataUrl, { x: 0, y: image.height * 0.58, width: image.width, height: image.height * 0.22 }, 3) });
-  // Variante extra: zona central da chave com upscale 4x
-  rendered.push({ label: 'chave-soft-4x', dataUrl: await buildSoftCrop(dataUrl, { x: 0, y: image.height * 0.62, width: image.width, height: image.height * 0.16 }, 4) });
+  // Variante dedicada para zona da chave: 55-80% da altura, upscale 3x, SEM threshold duro
+  rendered.push({ label: 'chave-soft-3x', dataUrl: await buildSoftCrop(dataUrl, { x: 0, y: image.height * 0.55, width: image.width, height: image.height * 0.25 }, 3) });
   return rendered;
 };
 const extractChaveFromUrl = (url) => {
