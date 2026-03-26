@@ -344,8 +344,10 @@ const parseNativePdfReceiptText = (text, items) => {
   // Ex: "0376914 CAFE MARATA 500g 20,000 UN 33,97 679,40"
   const patItemLine = /^(\d{4,})\s+(.+?)\s+(\d+[.,]\d{1,3})\s+(UN|KG|LT|ML|PCT|CX|GR|G|L|PC|DZ|MT|M)\s+([\d.,]+)\s+([\d.,]+)$/i;
 
-  // Padrão 2: Formato "Qtde.:VL. Unit.:Código:" (Assaí/Sendas)
-  const patAssai = /Qtde.*:.*VL.*Unit.*:.*digo:/i;
+  // Padrão 2: SEFAZ-TO / Assaí — "Código: XXXQtde.: Y VL. Unit.:Z"
+  // Linha completa: "Código: 1136158Qtde.: 1.0 VL. Unit.:9.9"
+  // Nome fica 2 linhas acima, total 1 linha acima
+  const patSefazTo = /C.digo:\s*(\d+)\s*Qtde\.?:\s*([\d.,]+)\s*VL\.?\s*Unit\.?:\s*([\d.,]+)/i;
 
   // Padrão 3: Formato inline "Qtde: X x Vl.Unit: Y = Z"
   const patInline = /Qtde?\.?:\s*([\d.,]+)\s*(?:x|X)\s*(?:Vl\.?\s*Unit\.?:?\s*)?([\d.,]+)\s*=?\s*([\d.,]+)?/i;
@@ -377,22 +379,23 @@ const parseNativePdfReceiptText = (text, items) => {
       continue;
     }
 
-    // Padrão 2: Assaí formato (busca linhas ao redor)
-    if (patAssai.test(line)) {
-      const code = line.match(/(\d{4,})/)?.[1] || '';
+    // Padrão 2: SEFAZ-TO / Assaí — "Código: XXXQtde.: Y VL. Unit.:Z"
+    const m2 = line.match(patSefazTo);
+    if (m2) {
+      const code = m2[1];
+      const quantidade = Number(m2[2].replace(',', '.'));
+      const precoUnit = Number(m2[3].replace(',', '.'));
+      // Total fica 1 linha acima, nome fica 2 linhas acima
       const totalLine = lines[index - 1] || '';
-      const compactLine = lines[index - 2] || '';
-      const nameLine = (lines[index + 1] || '').replace(/VL\. Total$/i, '').trim();
-      const qtyUnit = parseCompactQtyUnit(compactLine);
-      const total = Number(String(totalLine || '').replace(',', '.'));
-      if (qtyUnit && nameLine) {
+      const totalVal = Number(String(totalLine).replace(',', '.')) || (quantidade * precoUnit);
+      const nameLine = (lines[index - 2] || '').replace(/\s*VL\.?\s*Total\s*$/i, '').trim();
+      if (nameLine && nameLine.length >= 2) {
         const matchedItem = findExistingItem(nameLine, items);
         draftItems.push({
           id: draftItems.length + 1, include: true, nome: nameLine,
-          quantidade: qtyUnit.quantidade, unidade: 'un',
-          preco_unitario: qtyUnit.preco_unitario || (qtyUnit.quantidade ? Number((total / qtyUnit.quantidade).toFixed(2)) : 0),
+          quantidade, unidade: 'un', preco_unitario: precoUnit,
           item_cadastrado: matchedItem?.name || null, matchedItemId: matchedItem?.id || '',
-          confidence: 0.96, rawLine: 'PDF Assai' + (code ? ' - ' + code : '')
+          confidence: 0.97, rawLine: 'PDF SEFAZ-TO - cod ' + code
         });
       }
       continue;
@@ -423,17 +426,20 @@ const parseNativePdfReceiptText = (text, items) => {
   const unique = draftItems.filter((entry, idx, arr) => idx === arr.findIndex((item) => slug(item.nome) === slug(entry.nome) && item.preco_unitario === entry.preco_unitario && item.quantidade === entry.quantidade));
   console.log('[PDF Parser] Itens encontrados:', unique.length);
 
-  // Identificar emitente: primeira linha com texto significativo (não é título genérico)
-  const skipPatterns = /^(DANFE|NFC-?e|Documento|Nota Fiscal|Detalhe|Informac|PROTOCOLO|Consulte|Consumidor|CNPJ)/i;
-  const market = lines.find((line) => line.length > 5 && !skipPatterns.test(line) && /[A-Z]{3,}/i.test(line) && !/^\d+$/.test(line)) || 'Emitente nao identificado';
+  // Identificar emitente: linha logo após cabeçalho institucional, antes do CNPJ
+  const skipPatterns = /^(GOVERNO|SECRETARIA|DANFE|NFC-?e|Documento|Nota Fiscal|Detalhe|Informac|PROTOCOLO|Consulte|Consumidor|CNPJ|Inscr)/i;
+  const cnpjIdx = lines.findIndex((l) => /^CNPJ/i.test(l));
+  const market = (cnpjIdx > 0 ? lines[cnpjIdx - 1] : null) || lines.find((line) => line.length > 5 && !skipPatterns.test(line) && /[A-Z]{3,}/i.test(line) && !/^\d+$/.test(line)) || 'Emitente nao identificado';
 
-  // Data: formatos comuns "DD/MM/YYYY HH:MM:SS" ou "YYYY-MM-DDTHH:MM"
-  const dateMatch = String(text || '').match(/(\d{2})\/(\d{2})\/(\d{4})\s+\d{2}:\d{2}/) || String(text || '').match(/Emissao:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+  // Data: formatos comuns "DD/MM/YYYY HH:MM:SS", "DataDD/MM/YYYY", "Emissão: DD/MM/YYYY"
+  const dateMatch = String(text || '').match(/Data\s*:?\s*(\d{2})\/(\d{2})\/(\d{4})\s+\d{2}:\d{2}/)
+    || String(text || '').match(/Emiss.o:\s*(\d{2})\/(\d{2})\/(\d{4})/i)
+    || String(text || '').match(/(\d{2})\/(\d{2})\/(\d{4})\s+\d{2}:\d{2}/);
 
-  // Total: múltiplos padrões brasileiros
-  const totalMatch = String(text || '').match(/Valor\s+(?:a\s+)?Pagar\s*R?\$?\s*([\d.,]+)/i)
-    || String(text || '').match(/VALOR\s+PAGO\s*R?\$?\s*([\d.,]+)/i)
-    || String(text || '').match(/Total\s*R?\$?\s*([\d.,]+)/i);
+  // Total: múltiplos padrões brasileiros (com ou sem espaço, com prefixo numérico)
+  const totalMatch = String(text || '').match(/Valor\s*(?:a\s*)?Pag(?:ar|o)\s*:?\s*(?:\d+\s*)?R?\$?\s*([\d.,]+)/i)
+    || String(text || '').match(/VALOR\s*PAGO\s*:?\s*R?\$?\s*([\d.,]+)/i)
+    || String(text || '').match(/Total\s*:?\s*R?\$?\s*([\d.,]+)/i);
 
   const validAccessKeys = extractAccessKeyCandidates(text).filter((candidate) => validateAccessKey(candidate));
   const accessKey = validAccessKeys[0] || '';
