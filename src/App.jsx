@@ -452,11 +452,28 @@ const validateAccessKey = (key) => {
   return dv === Number(normalized[43]);
 };
 const loadImageFromDataUrl = (dataUrl) => new Promise((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => reject(new Error('Falha ao carregar imagem para leitura do QR Code.')); image.src = dataUrl; });
+
+// Cria canvas recortado + redimensionado para QR detection
+const createImageCanvas = (image, crop, scale = 1, filter = '') => {
+  const sx = Math.max(0, Math.round(crop.x || 0));
+  const sy = Math.max(0, Math.round(crop.y || 0));
+  const sw = Math.max(1, Math.round(Math.min(image.width - sx, crop.width || image.width)));
+  const sh = Math.max(1, Math.round(Math.min(image.height - sy, crop.height || image.height)));
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+  if (filter) ctx.filter = filter;
+  ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  return canvas;
+};
+
 const detectQrWithQrScanner = async (variants) => {
   for (const variant of variants) {
     try {
       const result = await QrScanner.scanImage(variant, { returnDetailedScanResult: true });
       if (result?.data) {
+        console.log('[QR] Detectado com qr-scanner:', result.data.slice(0, 100));
         return {
           rawValue: result.data,
           boundingBox: result.cornerPoints?.length ? {
@@ -471,27 +488,53 @@ const detectQrWithQrScanner = async (variants) => {
   }
   return { rawValue: '', boundingBox: null };
 };
+
 const detectQrDataFromDataUrl = async (dataUrl) => {
   if (!dataUrl) return { rawValue: '', boundingBox: null };
   try {
     const image = await loadImageFromDataUrl(dataUrl);
+    console.log('[QR] Imagem carregada:', image.width, 'x', image.height);
+
+    // Variantes de recorte: QR de cupom fica tipicamente no canto inferior-esquerdo
     const variants = [
       image,
-      createImageCanvas(image, { x: 0, y: image.height * 0.58, width: image.width, height: image.height * 0.42 }, 1.8),
-      createImageCanvas(image, { x: image.width * 0.45, y: image.height * 0.58, width: image.width * 0.55, height: image.height * 0.42 }, 2.2),
-      createImageCanvas(image, { x: 0, y: image.height * 0.5, width: image.width, height: image.height * 0.5 }, 2, 'grayscale(1) contrast(1.6) brightness(1.05)')
+      // Metade inferior completa (QR sempre fica na parte de baixo do cupom)
+      createImageCanvas(image, { x: 0, y: image.height * 0.5, width: image.width, height: image.height * 0.5 }, 2),
+      // Canto inferior-esquerdo (posição mais comum do QR em NFC-e)
+      createImageCanvas(image, { x: 0, y: image.height * 0.55, width: image.width * 0.5, height: image.height * 0.35 }, 3),
+      // Canto inferior-esquerdo com alto contraste
+      createImageCanvas(image, { x: 0, y: image.height * 0.55, width: image.width * 0.5, height: image.height * 0.35 }, 3, 'grayscale(1) contrast(2) brightness(1.1)'),
+      // Metade inferior com contraste
+      createImageCanvas(image, { x: 0, y: image.height * 0.5, width: image.width, height: image.height * 0.5 }, 2, 'grayscale(1) contrast(1.6) brightness(1.05)'),
+      // Terço inferior (QR mais perto do rodapé)
+      createImageCanvas(image, { x: 0, y: image.height * 0.6, width: image.width * 0.6, height: image.height * 0.35 }, 3.5),
+      // Escala maior para QR pequeno
+      createImageCanvas(image, { x: 0, y: image.height * 0.5, width: image.width * 0.5, height: image.height * 0.4 }, 4, 'grayscale(1) contrast(1.8)')
     ];
+
+    console.log('[QR] Testando', variants.length, 'variantes de recorte...');
     const qrScannerResult = await detectQrWithQrScanner(variants);
     if (qrScannerResult.rawValue) return qrScannerResult;
+
+    // Fallback: BarcodeDetector nativo (Chrome 83+)
     if (typeof BarcodeDetector !== 'undefined') {
+      console.log('[QR] Tentando BarcodeDetector nativo...');
       const detector = new BarcodeDetector({ formats: ['qr_code'] });
       for (const variant of variants) {
-        const codes = await detector.detect(variant);
-        if (codes?.[0]?.rawValue) return { rawValue: codes[0].rawValue || '', boundingBox: codes[0].boundingBox || null };
+        try {
+          const codes = await detector.detect(variant);
+          if (codes?.[0]?.rawValue) {
+            console.log('[QR] Detectado com BarcodeDetector:', codes[0].rawValue.slice(0, 100));
+            return { rawValue: codes[0].rawValue, boundingBox: codes[0].boundingBox || null };
+          }
+        } catch {}
       }
     }
+
+    console.log('[QR] Nenhum QR detectado em nenhuma variante.');
     return { rawValue: '', boundingBox: null };
-  } catch {
+  } catch (err) {
+    console.error('[QR] Erro geral:', err);
     return { rawValue: '', boundingBox: null };
   }
 };
