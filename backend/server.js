@@ -7,7 +7,7 @@ const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const Jimp = require('jimp');
+const sharp = require('sharp');
 const jsQR = require('jsqr');
 const tesseract = require('node-tesseract-ocr');
 const pdfParse = require('pdf-parse');
@@ -144,6 +144,37 @@ function extrairChavesDoTexto(texto) {
   };
 }
 
+function extrairChaveDeUrl(qrData) {
+  const texto = String(qrData || '');
+
+  // Tenta parâmetro chNFe na URL (formato padrão SEFAZ)
+  const matchChNFe = texto.match(/[?&](?:chNFe|p)=(\d{44})/i);
+  if (matchChNFe && validarChaveAcesso(matchChNFe[1])) {
+    return matchChNFe[1];
+  }
+
+  // Tenta extrair do path da URL (algumas SEFAZ colocam no path)
+  const matchPath = texto.match(/\/(\d{44})(?:[/?&#]|$)/);
+  if (matchPath && validarChaveAcesso(matchPath[1])) {
+    return matchPath[1];
+  }
+
+  // Tenta parâmetro p= com pipe-separated (formato compacto NFC-e)
+  const matchP = texto.match(/[?&]p=([^&]+)/i);
+  if (matchP) {
+    const valorP = decodeURIComponent(matchP[1]);
+    const digitos = apenasDigitos(valorP);
+    if (digitos.length >= 44) {
+      const chave = digitos.slice(0, 44);
+      if (validarChaveAcesso(chave)) {
+        return chave;
+      }
+    }
+  }
+
+  return '';
+}
+
 function slug(valor) {
   return String(valor || '')
     .normalize('NFD')
@@ -247,29 +278,120 @@ function extrairJson(texto) {
   }
 }
 
+async function tentarJsQR(sharpInstance) {
+  const { data, info } = await sharpInstance
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return jsQR(new Uint8ClampedArray(data), info.width, info.height);
+}
+
 async function lerQrCodeDaImagem(bufferImagem) {
   try {
-    const imagem = await Jimp.read(bufferImagem);
-    const { data, width, height } = imagem.bitmap;
-    const qr = jsQR(new Uint8ClampedArray(data), width, height);
+    const img = sharp(bufferImagem);
+    const metadata = await img.metadata();
+    const { width, height } = metadata;
 
-    if (!qr?.data) {
-      return {
-        raw: '',
-        chave: '',
-        candidatas: [],
-        erro: 'QR Code nao encontrado.',
-      };
+    if (!width || !height) {
+      return { raw: '', chave: '', candidatas: [], erro: 'Imagem invalida ou sem dimensoes.' };
     }
 
-    const candidatas = extrairSequencias44(qr.data);
-    const validas = candidatas.filter(validarChaveAcesso);
+    // Pipeline de tentativas — cada uma aplica pré-processamento diferente
+    const tentativas = [
+      // 1. Imagem original
+      () => tentarJsQR(sharp(bufferImagem)),
+
+      // 2. Grayscale + normalize + threshold
+      () => tentarJsQR(sharp(bufferImagem).greyscale().normalize().threshold(128)),
+
+      // 3. Metade inferior (onde QR tipicamente fica na NFC-e) + threshold
+      () => tentarJsQR(
+        sharp(bufferImagem)
+          .extract({ left: 0, top: Math.floor(height * 0.5), width, height: Math.floor(height * 0.5) })
+          .greyscale()
+          .normalize()
+          .threshold(128)
+      ),
+
+      // 4. Terço inferior + upscale 2x + threshold (para QR codes pequenos)
+      () => {
+        const cropH = Math.floor(height * 0.35);
+        const cropTop = height - cropH;
+        return tentarJsQR(
+          sharp(bufferImagem)
+            .extract({ left: 0, top: cropTop, width, height: cropH })
+            .resize({ width: width * 2, height: cropH * 2, fit: 'fill' })
+            .greyscale()
+            .normalize()
+            .threshold(128)
+        );
+      },
+
+      // 5. Imagem invertida + threshold (para QR escuro em fundo claro com problemas)
+      () => tentarJsQR(sharp(bufferImagem).greyscale().negate().normalize().threshold(128)),
+
+      // 6. Threshold mais agressivo (para fotos com pouco contraste)
+      () => tentarJsQR(sharp(bufferImagem).greyscale().normalize().threshold(90)),
+
+      // 7. Metade inferior com threshold menos agressivo
+      () => tentarJsQR(
+        sharp(bufferImagem)
+          .extract({ left: 0, top: Math.floor(height * 0.5), width, height: Math.floor(height * 0.5) })
+          .greyscale()
+          .normalize()
+          .threshold(170)
+      ),
+    ];
+
+    for (let i = 0; i < tentativas.length; i += 1) {
+      try {
+        const qr = await tentativas[i]();
+        if (qr?.data) {
+          console.log(`[QR] Detectado na tentativa ${i + 1} de ${tentativas.length}`);
+
+          // Tenta extrair chave via parâmetros da URL primeiro
+          const chaveUrl = extrairChaveDeUrl(qr.data);
+          if (chaveUrl) {
+            return {
+              raw: qr.data,
+              chave: chaveUrl,
+              candidatas: [chaveUrl],
+              erro: '',
+            };
+          }
+
+          // Fallback: busca sequências de 44 dígitos no texto bruto
+          const candidatas = extrairSequencias44(qr.data);
+          // Também busca nos dígitos puros do QR
+          const digitosPuros = apenasDigitos(qr.data);
+          if (digitosPuros.length >= 44) {
+            for (let inicio = 0; inicio <= digitosPuros.length - 44; inicio += 1) {
+              const seq = digitosPuros.slice(inicio, inicio + 44);
+              if (!candidatas.includes(seq)) {
+                candidatas.push(seq);
+              }
+            }
+          }
+
+          const validas = candidatas.filter(validarChaveAcesso);
+
+          return {
+            raw: qr.data,
+            chave: validas[0] || candidatas[0] || '',
+            candidatas,
+            erro: validas.length || candidatas.length ? '' : 'QR Code lido, mas sem chave identificada.',
+          };
+        }
+      } catch {
+        // Tentativa falhou, prosseguir para a próxima
+      }
+    }
 
     return {
-      raw: qr.data,
-      chave: validas[0] || candidatas[0] || '',
-      candidatas,
-      erro: validas.length || candidatas.length ? '' : 'QR Code lido, mas sem chave identificada.',
+      raw: '',
+      chave: '',
+      candidatas: [],
+      erro: 'QR Code nao encontrado apos multiplas tentativas de preprocessamento.',
     };
   } catch (error) {
     return {
@@ -282,19 +404,21 @@ async function lerQrCodeDaImagem(bufferImagem) {
 }
 
 async function executarOCR(bufferImagem) {
-  const imagem = await Jimp.read(bufferImagem);
-  const largura = imagem.bitmap.width;
-  const altura = imagem.bitmap.height;
-  const regiaoInferior = imagem.clone().crop(0, Math.floor(altura * 0.55), largura, Math.floor(altura * 0.45));
+  const metadata = await sharp(bufferImagem).metadata();
+  const { width, height } = metadata;
 
-  regiaoInferior
+  const cropTop = Math.floor(height * 0.55);
+  const cropHeight = Math.max(1, height - cropTop);
+
+  const bufferProcessado = await sharp(bufferImagem)
+    .extract({ left: 0, top: cropTop, width, height: cropHeight })
     .greyscale()
-    .contrast(0.6)
     .normalize()
     .blur(1)
-    .threshold({ max: 185 });
+    .threshold(185)
+    .png()
+    .toBuffer();
 
-  const bufferProcessado = await regiaoInferior.getBufferAsync(Jimp.MIME_PNG);
   const texto = await tesseract.recognize(bufferProcessado, TESSERACT_CONFIG);
 
   return texto;

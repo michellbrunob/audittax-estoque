@@ -12,11 +12,11 @@
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
     "express": "^4.21.2",
-    "jimp": "^0.22.12",
     "jsqr": "^1.4.0",
     "multer": "^1.4.5-lts.1",
     "node-tesseract-ocr": "^2.2.1",
     "pdf-parse": "^1.1.1",
-    "pdf-poppler": "^0.2.1"
+    "pdf-poppler": "^0.2.1",
+    "sharp": "^0.34.5"
   }
 }
