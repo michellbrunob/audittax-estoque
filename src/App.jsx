@@ -450,8 +450,11 @@ const parseNativePdfReceiptText = (text, items) => {
     || String(text || '').match(/VALOR\s*PAGO\s*:?\s*R?\$?\s*([\d.,]+)/i)
     || String(text || '').match(/Total\s*:?\s*R?\$?\s*([\d.,]+)/i);
 
+  // Busca direta: "Chave de acesso:17260106..." (padrão exato do PDF SEFAZ-TO)
+  const directKeyMatch = text.match(/[Cc]have\s+de\s+[Aa]cesso\s*:?\s*(\d{44})/);
+  const directKey = directKeyMatch?.[1] || '';
   const validAccessKeys = extractAccessKeyCandidates(text).filter((candidate) => validateAccessKey(candidate));
-  const accessKey = validAccessKeys[0] || '';
+  const accessKey = directKey || validAccessKeys[0] || '';
 
   // URL de consulta SEFAZ (qualquer UF)
   const sefazUrl = String(text || '').match(/(https?:\/\/www\.sefaz\.[a-z]{2}\.gov\.br\/nfce\/[^\s]+)/i)?.[1] || '';
@@ -874,6 +877,7 @@ function App() {
     let previewDataUrl = '';
     let sourceForOcr = file;
     let fileDataUrl = '';
+    let pdfAccessKey = '';
     const lowerName = file.name.toLowerCase();
     const isXml = file.type.includes('xml') || lowerName.endsWith('.xml');
     const fileMimeType = file.type || (lowerName.endsWith('.pdf') ? 'application/pdf' : isXml ? 'application/xml' : 'image/*');
@@ -906,6 +910,9 @@ function App() {
         console.log('[PDF] Texto extraido:', pdfText.length, 'chars, primeiras 500:', pdfText.slice(0, 500));
         const parsedPdf = parseNativePdfReceiptText(pdfText, state.items);
         console.log('[PDF] Resultado parse:', parsedPdf.items?.length, 'itens, chave:', parsedPdf.accessKey ? 'SIM' : 'NAO', 'total:', parsedPdf.total);
+        // Guardar chave extraída do PDF textual mesmo que itens falhem
+        pdfAccessKey = parsedPdf.accessKey || '';
+        const pdfQueryUrl = parsedPdf.queryUrl || '';
         if (parsedPdf.items?.length) {
           const draftItems = consolidateDraftItems(parsedPdf.items, state.items);
           const supplierMatch = findExistingSupplier(parsedPdf.mercado, state.suppliers);
@@ -913,6 +920,7 @@ function App() {
           showFlash(parsedPdf.accessKey ? 'PDF textual importado com chave e itens.' : 'PDF textual importado. Confira a chave antes de importar.', parsedPdf.accessKey ? 'success' : 'warn');
           return;
         }
+        console.warn('[PDF] Parser nao encontrou itens, caindo no fallback OCR. Chave do PDF preservada:', pdfAccessKey || '(nenhuma)');
         const rendered = await renderPdfFirstPage(file);
         previewDataUrl = rendered.dataUrl;
         sourceForOcr = rendered.blob;
@@ -949,7 +957,7 @@ function App() {
       console.log('[OCR] Texto combinado:', combinedOcrText.length, 'chars,', combinedOcrText.replace(/\D/g, '').length, 'digitos');
       console.log('[Entrada] QR detectado:', qrData.rawValue ? 'Sim (' + qrData.rawValue.slice(0, 80) + '...)' : 'Nao');
       const bestKey = chooseBestAccessKey({ ocrText: combinedOcrText, qrRawValue: qrData.rawValue });
-      const resolvedAccessKey = backendKeyResult?.chaveAcesso || backendKeyResult?.bestEffortKey || backendKeyResult?.candidatas?.[0] || bestKey.key;
+      const resolvedAccessKey = pdfAccessKey || backendKeyResult?.chaveAcesso || backendKeyResult?.bestEffortKey || backendKeyResult?.candidatas?.[0] || bestKey.key;
       console.log('[Entrada] Chave resolvida:', resolvedAccessKey || '(nenhuma)', '| Fonte:', backendKeyResult?.fonte || bestKey.source || '(nenhuma)');
       const resolvedAccessKeySource = backendKeyResult?.fonte ? backendSourceLabel(backendKeyResult.fonte) : bestKey.source;
       const resolvedAccessKeyValid = backendKeyResult?.validada !== undefined ? backendKeyResult.validada : (backendKeyResult?.chaveAcesso ? true : bestKey.valid);
