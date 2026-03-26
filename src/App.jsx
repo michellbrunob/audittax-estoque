@@ -379,74 +379,62 @@ const parseNativePdfReceiptText = (text, items) => {
   };
 };
 const extractAccessKey = (raw) => String(raw || '').replace(/\D/g, '').match(/\d{44}/)?.[0] || '';
-// Corrige erros OCR APENAS em trechos que já são predominantemente dígitos
-// Ex: "600]" → "6001", "55l2" → "5512". NÃO aplica em texto com letras.
-const fixOcrInDigitRun = (text) => String(text || '').replace(/\]/g, '1').replace(/[|!]/g, '1').replace(/[[\]]/g, '1');
+// Corrige erros OCR leves em trechos que já são predominantemente dígitos
+const fixOcrInDigitRun = (text) => String(text || '').replace(/[\]|!]/g, '1');
 
-// Verifica se uma linha é predominantemente dígitos (>60% dos caracteres não-espaço são dígitos)
+// Verifica se uma linha é predominantemente dígitos (>70% dos não-espaço são dígitos)
 const isDigitLine = (line) => {
   const chars = line.replace(/\s/g, '');
-  if (chars.length < 20) return false;
+  if (chars.length < 30) return false;
   const digitCount = (chars.match(/\d/g) || []).length;
-  return digitCount / chars.length > 0.6;
+  return digitCount / chars.length > 0.7;
 };
 
 const extractAccessKeyCandidates = (raw) => {
   const text = String(raw || '');
-  const prioritized = [];
-  const others = new Set();
+  const candidates = [];
 
-  // 1. Busca direta por 44 dígitos consecutivos
+  // 1. Busca direta por 44 dígitos consecutivos (ex: chave sem espaços)
   const directMatches = text.match(/\d{44}/g) || [];
-  directMatches.forEach((m) => others.add(m));
+  directMatches.forEach((m) => candidates.push(m));
 
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
-  // 2. Linhas predominantemente numéricas (padrão visual da chave: "1726 0111 1642 ...")
+  // 2. Linhas predominantemente numéricas (padrão visual: "1726 0111 1642 4800 ...")
+  // APENAS extrai de linhas que já são >70% dígitos — evita falsos positivos
   for (const line of lines) {
     if (isDigitLine(line)) {
-      // Correção leve: só ] | ! que são erros comuns em sequências de dígitos
       const fixed = fixOcrInDigitRun(line);
       const digits = fixed.replace(/\D/g, '');
       if (digits.length >= 44) {
-        prioritized.push(digits.slice(0, 44));
-        // Também testa sliding window dentro da linha
-        for (let j = 1; j <= digits.length - 44; j += 1) {
-          prioritized.push(digits.slice(j, j + 44));
+        // Sliding window APENAS dentro desta linha de dígitos
+        for (let j = 0; j <= digits.length - 44; j += 1) {
+          candidates.push(digits.slice(j, j + 44));
         }
       }
     }
   }
 
-  // 3. Busca contextual: linhas próximas a "chave" / "acesso" / "consulte" / "sefaz"
+  // 3. Busca contextual: linha de dígitos logo após "chave" / "acesso"
   for (let i = 0; i < lines.length; i += 1) {
-    if (/chave|acesso|consulte|sefaz/i.test(lines[i])) {
-      // Pega as próximas linhas e extrai dígitos de cada uma separadamente
-      for (let k = i + 1; k < Math.min(i + 6, lines.length); k += 1) {
-        const nearby = lines[k];
-        if (isDigitLine(nearby)) {
-          const fixed = fixOcrInDigitRun(nearby);
+    if (/chave|acesso/i.test(lines[i])) {
+      // Procura a próxima linha que é predominantemente numérica
+      for (let k = i + 1; k < Math.min(i + 5, lines.length); k += 1) {
+        if (isDigitLine(lines[k])) {
+          const fixed = fixOcrInDigitRun(lines[k]);
           const digits = fixed.replace(/\D/g, '');
           if (digits.length >= 44) {
-            prioritized.push(digits.slice(0, 44));
+            for (let j = 0; j <= digits.length - 44; j += 1) {
+              candidates.push(digits.slice(j, j + 44));
+            }
           }
         }
       }
-      // Também tenta juntar dígitos de todas as linhas próximas
-      const windowDigits = lines.slice(i, i + 6).join(' ').replace(/\D/g, '');
-      for (let j = 0; j <= windowDigits.length - 44; j += 1) {
-        others.add(windowDigits.slice(j, j + 44));
-      }
     }
   }
 
-  // 4. Sliding window no texto inteiro (SEM correção agressiva)
-  const digitsOnly = text.replace(/\D/g, '');
-  for (let i = 0; i <= digitsOnly.length - 44; i += 1) {
-    others.add(digitsOnly.slice(i, i + 44));
-  }
-
-  return [...new Set([...prioritized, ...others])];
+  // NÃO faz sliding window no texto inteiro — causa falsos positivos
+  return [...new Set(candidates)];
 };
 const validateAccessKey = (key) => {
   const normalized = String(key || '').replace(/\D/g, '');
