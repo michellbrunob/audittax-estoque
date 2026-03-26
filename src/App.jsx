@@ -336,37 +336,113 @@ const parseCompactQtyUnit = (raw) => {
 const parseNativePdfReceiptText = (text, items) => {
   const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const draftItems = [];
+  console.log('[PDF Parser] Total de linhas extraidas:', lines.length);
+  console.log('[PDF Parser] Primeiras 30 linhas:', lines.slice(0, 30));
+
+  // Padrão 1: DANFE NFC-e padrão SEFAZ — "COD DESCRICAO QTD UN VL_UNIT VL_TOTAL"
+  // Ex: "1257654 LIMP PERF UAU ING 1,000 UN 14,97 14,97"
+  // Ex: "0376914 CAFE MARATA 500g 20,000 UN 33,97 679,40"
+  const patItemLine = /^(\d{4,})\s+(.+?)\s+(\d+[.,]\d{1,3})\s+(UN|KG|LT|ML|PCT|CX|GR|G|L|PC|DZ|MT|M)\s+([\d.,]+)\s+([\d.,]+)$/i;
+
+  // Padrão 2: Formato "Qtde.:VL. Unit.:Código:" (Assaí/Sendas)
+  const patAssai = /Qtde.*:.*VL.*Unit.*:.*digo:/i;
+
+  // Padrão 3: Formato inline "Qtde: X x Vl.Unit: Y = Z"
+  const patInline = /Qtde?\.?:\s*([\d.,]+)\s*(?:x|X)\s*(?:Vl\.?\s*Unit\.?:?\s*)?([\d.,]+)\s*=?\s*([\d.,]+)?/i;
+
   for (let index = 0; index < lines.length; index += 1) {
-    if (!/^Qtde\\.:VL\\. Unit\\.:C.*digo:/i.test(lines[index])) continue;
-    const code = lines[index].match(/(\d{4,})/)?.[1] || '';
-    const totalLine = lines[index - 1] || '';
-    const compactLine = lines[index - 2] || '';
-    const nameLine = (lines[index + 1] || '').replace(/VL\. Total$/i, '').trim();
-    const qtyUnit = parseCompactQtyUnit(compactLine);
-    const total = Number(String(totalLine || '').replace(',', '.'));
-    if (!qtyUnit || !nameLine) continue;
-    const matchedItem = findExistingItem(nameLine, items);
-    draftItems.push({
-      id: draftItems.length + 1,
-      include: true,
-      nome: nameLine,
-      quantidade: qtyUnit.quantidade,
-      unidade: 'un',
-      preco_unitario: qtyUnit.preco_unitario || (qtyUnit.quantidade ? Number((total / qtyUnit.quantidade).toFixed(2)) : 0),
-      item_cadastrado: matchedItem?.name || null,
-      matchedItemId: matchedItem?.id || '',
-      confidence: 0.98,
-      rawLine: 'PDF texto nativo' + (code ? ' - codigo ' + code : '')
-    });
+    const line = lines[index];
+
+    // Padrão 1: Linha completa com código + descrição + qtd + un + preço
+    const m1 = line.match(patItemLine);
+    if (m1) {
+      const nome = m1[2].trim();
+      const quantidade = Number(m1[3].replace(',', '.'));
+      const unidade = m1[4].toLowerCase();
+      const precoUnit = Number(m1[5].replace('.', '').replace(',', '.'));
+      const totalItem = Number(m1[6].replace('.', '').replace(',', '.'));
+      const matchedItem = findExistingItem(nome, items);
+      draftItems.push({
+        id: draftItems.length + 1,
+        include: true,
+        nome,
+        quantidade,
+        unidade: normalizeUnit(unidade) || 'un',
+        preco_unitario: precoUnit || (quantidade ? Number((totalItem / quantidade).toFixed(2)) : 0),
+        item_cadastrado: matchedItem?.name || null,
+        matchedItemId: matchedItem?.id || '',
+        confidence: 0.97,
+        rawLine: 'PDF - codigo ' + m1[1]
+      });
+      continue;
+    }
+
+    // Padrão 2: Assaí formato (busca linhas ao redor)
+    if (patAssai.test(line)) {
+      const code = line.match(/(\d{4,})/)?.[1] || '';
+      const totalLine = lines[index - 1] || '';
+      const compactLine = lines[index - 2] || '';
+      const nameLine = (lines[index + 1] || '').replace(/VL\. Total$/i, '').trim();
+      const qtyUnit = parseCompactQtyUnit(compactLine);
+      const total = Number(String(totalLine || '').replace(',', '.'));
+      if (qtyUnit && nameLine) {
+        const matchedItem = findExistingItem(nameLine, items);
+        draftItems.push({
+          id: draftItems.length + 1, include: true, nome: nameLine,
+          quantidade: qtyUnit.quantidade, unidade: 'un',
+          preco_unitario: qtyUnit.preco_unitario || (qtyUnit.quantidade ? Number((total / qtyUnit.quantidade).toFixed(2)) : 0),
+          item_cadastrado: matchedItem?.name || null, matchedItemId: matchedItem?.id || '',
+          confidence: 0.96, rawLine: 'PDF Assai' + (code ? ' - ' + code : '')
+        });
+      }
+      continue;
+    }
+
+    // Padrão 3: Inline — nome na linha anterior, "Qtde: X x Vl.Unit: Y = Z" na linha atual
+    const m3 = line.match(patInline);
+    if (m3 && index > 0) {
+      const prevLine = lines[index - 1] || '';
+      // Linha anterior não pode ser outro padrão numérico
+      if (prevLine && !/^\d+[.,]\d/.test(prevLine) && !/Qtde/i.test(prevLine)) {
+        const nome = prevLine.replace(/^\d{4,}\s*-?\s*/, '').trim();
+        if (nome.length >= 3) {
+          const quantidade = Number(m3[1].replace(',', '.'));
+          const precoUnit = Number(m3[2].replace('.', '').replace(',', '.'));
+          const matchedItem = findExistingItem(nome, items);
+          draftItems.push({
+            id: draftItems.length + 1, include: true, nome,
+            quantidade, unidade: 'un', preco_unitario: precoUnit,
+            item_cadastrado: matchedItem?.name || null, matchedItemId: matchedItem?.id || '',
+            confidence: 0.94, rawLine: 'PDF inline'
+          });
+        }
+      }
+    }
   }
+
   const unique = draftItems.filter((entry, idx, arr) => idx === arr.findIndex((item) => slug(item.nome) === slug(entry.nome) && item.preco_unitario === entry.preco_unitario && item.quantidade === entry.quantidade));
-  const market = lines.find((line) => /SENDAS DISTRIBUIDORA|DANFE NFC-e/i.test(line)) || 'Emitente nao identificado';
-  const dateMatch = String(text || '').match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2}:\d{2})/);
-  const totalMatch = String(text || '').match(/Valor pago:\s*\d+R\$\s*([\d.,]+)/i);
-    const validAccessKeys = extractAccessKeyCandidates(text).filter((candidate) => validateAccessKey(candidate));
+  console.log('[PDF Parser] Itens encontrados:', unique.length);
+
+  // Identificar emitente: primeira linha com texto significativo (não é título genérico)
+  const skipPatterns = /^(DANFE|NFC-?e|Documento|Nota Fiscal|Detalhe|Informac|PROTOCOLO|Consulte|Consumidor|CNPJ)/i;
+  const market = lines.find((line) => line.length > 5 && !skipPatterns.test(line) && /[A-Z]{3,}/i.test(line) && !/^\d+$/.test(line)) || 'Emitente nao identificado';
+
+  // Data: formatos comuns "DD/MM/YYYY HH:MM:SS" ou "YYYY-MM-DDTHH:MM"
+  const dateMatch = String(text || '').match(/(\d{2})\/(\d{2})\/(\d{4})\s+\d{2}:\d{2}/) || String(text || '').match(/Emissao:\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+
+  // Total: múltiplos padrões brasileiros
+  const totalMatch = String(text || '').match(/Valor\s+(?:a\s+)?Pagar\s*R?\$?\s*([\d.,]+)/i)
+    || String(text || '').match(/VALOR\s+PAGO\s*R?\$?\s*([\d.,]+)/i)
+    || String(text || '').match(/Total\s*R?\$?\s*([\d.,]+)/i);
+
+  const validAccessKeys = extractAccessKeyCandidates(text).filter((candidate) => validateAccessKey(candidate));
   const accessKey = validAccessKeys[0] || '';
+
+  // URL de consulta SEFAZ (qualquer UF)
+  const sefazUrl = String(text || '').match(/(https?:\/\/www\.sefaz\.[a-z]{2}\.gov\.br\/nfce\/[^\s]+)/i)?.[1] || '';
+
   return {
-    mercado: market.trim() || 'Emitente nao identificado',
+    mercado: market.trim(),
     data: dateMatch ? (dateMatch[3] + '-' + dateMatch[2] + '-' + dateMatch[1]) : todayString(),
     total: totalMatch ? parseMoneyValue(totalMatch[1]) : 0,
     accessKey,
@@ -375,7 +451,7 @@ const parseNativePdfReceiptText = (text, items) => {
     accessKeyCandidates: validAccessKeys.length ? validAccessKeys : extractAccessKeyCandidates(text),
     items: unique,
     sourceMode: 'pdf-texto',
-    queryUrl: /http:\/\/www\.sefaz\.to\.gov\.br\/nfce\/consulta\.jsf/i.test(text) ? 'http://www.sefaz.to.gov.br/nfce/consulta.jsf' : ''
+    queryUrl: sefazUrl || ''
   };
 };
 const extractAccessKey = (raw) => String(raw || '').replace(/\D/g, '').match(/\d{44}/)?.[0] || '';
