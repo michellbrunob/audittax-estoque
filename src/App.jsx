@@ -381,31 +381,47 @@ const parseNativePdfReceiptText = (text, items) => {
 const extractAccessKey = (raw) => String(raw || '').replace(/\D/g, '').match(/\d{44}/)?.[0] || '';
 const extractAccessKeyCandidates = (raw) => {
   const text = String(raw || '');
-  const candidates = new Set();
+  const prioritized = [];
+  const others = new Set();
 
   // 1. Busca direta por 44 dígitos consecutivos
   const directMatches = text.match(/\d{44}/g) || [];
-  directMatches.forEach((m) => candidates.add(m));
+  directMatches.forEach((m) => others.add(m));
 
-  // 2. Remove TODOS os não-dígitos e busca janelas de 44 dígitos (chave espaçada)
-  const digitsOnly = text.replace(/\D/g, '');
-  for (let i = 0; i <= digitsOnly.length - 44; i += 1) {
-    candidates.add(digitsOnly.slice(i, i + 44));
-  }
-
-  // 3. Busca contextual: linhas próximas a "chave de acesso"
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  // 2. Padrão visual: linha com grupos de 4 dígitos (ex: "1726 0111 1642 4800 ...")
+  // A chave de NFC-e é impressa assim no cupom
   for (let i = 0; i < lines.length; i += 1) {
-    if (/chave\s+de\s+acesso/i.test(lines[i])) {
-      const window = lines.slice(i, i + 5).join(' ');
-      const windowDigits = window.replace(/\D/g, '');
-      for (let j = 0; j <= windowDigits.length - 44; j += 1) {
-        candidates.add(windowDigits.slice(j, j + 44));
+    const line = lines[i];
+    const digitGroups = line.match(/\d[\d\s.,]{40,}\d/);
+    if (digitGroups) {
+      const digits = digitGroups[0].replace(/\D/g, '');
+      if (digits.length >= 44) {
+        prioritized.push(digits.slice(0, 44));
       }
     }
   }
 
-  return Array.from(candidates);
+  // 3. Busca contextual: linhas próximas a "chave de acesso" / "consulte" / "chave"
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/chave|consulte.*chave|acesso/i.test(lines[i])) {
+      const window = lines.slice(i, i + 6).join(' ');
+      const windowDigits = window.replace(/\D/g, '');
+      for (let j = 0; j <= windowDigits.length - 44; j += 1) {
+        prioritized.push(windowDigits.slice(j, j + 44));
+      }
+    }
+  }
+
+  // 4. Fallback: remove todos os não-dígitos do texto inteiro e faz sliding window
+  const digitsOnly = text.replace(/\D/g, '');
+  for (let i = 0; i <= digitsOnly.length - 44; i += 1) {
+    others.add(digitsOnly.slice(i, i + 44));
+  }
+
+  // Priorizadas primeiro, depois as outras
+  return [...new Set([...prioritized, ...others])];
 };
 const validateAccessKey = (key) => {
   const normalized = String(key || '').replace(/\D/g, '');
@@ -488,6 +504,21 @@ const buildProcessedCrop = async (dataUrl, crop = null) => {
   context.putImageData(imageData, 0, 0);
   return canvas.toDataURL('image/png');
 };
+const buildSoftCrop = async (dataUrl, crop, scaleFactor = 3) => {
+  const image = await loadImageFromDataUrl(dataUrl);
+  const sx = Math.max(0, crop?.x || 0);
+  const sy = Math.max(0, crop?.y || 0);
+  const sw = Math.max(1, Math.min(image.width - sx, crop?.width || image.width));
+  const sh = Math.max(1, Math.min(image.height - sy, crop?.height || image.height));
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  canvas.width = sw * scaleFactor;
+  canvas.height = sh * scaleFactor;
+  // Grayscale + alto contraste, SEM threshold duro (preserva dígitos pequenos)
+  context.filter = 'grayscale(1) contrast(2.0) brightness(1.1)';
+  context.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/png');
+};
 const buildOcrVariants = async (dataUrl, qrBox = null) => {
   const image = await loadImageFromDataUrl(dataUrl);
   const variants = [
@@ -511,6 +542,10 @@ const buildOcrVariants = async (dataUrl, qrBox = null) => {
   for (const variant of variants) {
     rendered.push({ label: variant.label, dataUrl: await buildProcessedCrop(dataUrl, variant.crop) });
   }
+  // Variante dedicada para chave de acesso: 58-80% da altura, upscale 3x, SEM threshold duro
+  rendered.push({ label: 'chave-soft-3x', dataUrl: await buildSoftCrop(dataUrl, { x: 0, y: image.height * 0.58, width: image.width, height: image.height * 0.22 }, 3) });
+  // Variante extra: zona central da chave com upscale 4x
+  rendered.push({ label: 'chave-soft-4x', dataUrl: await buildSoftCrop(dataUrl, { x: 0, y: image.height * 0.62, width: image.width, height: image.height * 0.16 }, 4) });
   return rendered;
 };
 const extractChaveFromUrl = (url) => {
@@ -569,21 +604,38 @@ const chooseBestAccessKey = ({ ocrText, qrRawValue }) => {
   // 4. Fallback: candidatas nao validadas (melhor que nada)
   if (qrRawCandidates.length) return { key: qrRawCandidates[0], source: 'QR Code', valid: false, candidates: qrRawCandidates };
 
-  // 5. OCR contextual sem validação - busca chave perto do rótulo mesmo sem validar checksum
+  // 5. OCR contextual sem validação - busca perto de "chave", "acesso", "consulte", "sefaz"
   const lines = String(ocrText || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   for (let i = 0; i < lines.length; i += 1) {
-    if (/chave\s+de\s+acesso/i.test(lines[i])) {
-      const window = lines.slice(i, i + 5).join(' ');
+    if (/chave|acesso|consulte|sefaz/i.test(lines[i])) {
+      const window = lines.slice(i, i + 6).join(' ');
       const windowDigits = window.replace(/\D/g, '');
       if (windowDigits.length >= 44) {
         const candidate = windowDigits.slice(0, 44);
-        console.log('[chooseBestAccessKey] Chave contextual nao validada:', candidate);
+        console.log('[chooseBestAccessKey] Chave contextual nao validada (perto de "' + lines[i].slice(0, 40) + '"):', candidate);
         return { key: candidate, source: 'OCR (nao validada)', valid: false, candidates: [candidate, ...ocrRawCandidates.slice(0, 5)] };
       }
     }
   }
 
-  if (ocrRawCandidates.length) return { key: ocrRawCandidates[0], source: 'OCR', valid: false, candidates: ocrRawCandidates };
+  // 6. Busca por linha com padrão de grupos de 4 dígitos (formato visual da chave)
+  for (const line of lines) {
+    const match = line.match(/(\d{4}\s+){8,}\d+/);
+    if (match) {
+      const digits = match[0].replace(/\D/g, '');
+      if (digits.length >= 44) {
+        const candidate = digits.slice(0, 44);
+        console.log('[chooseBestAccessKey] Chave por padrao de grupos de 4:', candidate);
+        return { key: candidate, source: 'OCR (padrao visual)', valid: false, candidates: [candidate, ...ocrRawCandidates.slice(0, 5)] };
+      }
+    }
+  }
+
+  // 7. Prioriza primeira candidata do extractAccessKeyCandidates (já vem priorizada)
+  if (ocrRawCandidates.length) {
+    console.log('[chooseBestAccessKey] Usando primeira candidata priorizada:', ocrRawCandidates[0]);
+    return { key: ocrRawCandidates[0], source: 'OCR', valid: false, candidates: ocrRawCandidates };
+  }
   console.log('[chooseBestAccessKey] Nenhuma chave encontrada');
   return { key: '', source: '', valid: false, candidates: [] };
 };
@@ -759,9 +811,19 @@ function App() {
       const ocrTexts = [];
       for (const variant of variants) {
         const result = await worker.recognize(variant.dataUrl);
-        ocrTexts.push(result.data.text || '');
+        const variantText = result.data.text || '';
+        ocrTexts.push(variantText);
+        // Log das variantes que contêm dígitos relevantes
+        const variantDigits = variantText.replace(/\D/g, '');
+        if (variantDigits.length >= 44) {
+          console.log(`[OCR] ${variant.label}: ${variantText.length} chars, ${variantDigits.length} digitos`);
+          if (/chave|acesso|consulte|sefaz/i.test(variantText)) {
+            console.log(`[OCR] ${variant.label}: contem contexto de chave!`);
+          }
+        }
       }
       const combinedOcrText = ocrTexts.join('\n');
+      console.log('[OCR] Texto combinado:', combinedOcrText.length, 'chars,', combinedOcrText.replace(/\D/g, '').length, 'digitos');
       console.log('[Entrada] QR detectado:', qrData.rawValue ? 'Sim (' + qrData.rawValue.slice(0, 80) + '...)' : 'Nao');
       const bestKey = chooseBestAccessKey({ ocrText: combinedOcrText, qrRawValue: qrData.rawValue });
       const resolvedAccessKey = backendKeyResult?.chaveAcesso || backendKeyResult?.bestEffortKey || backendKeyResult?.candidatas?.[0] || bestKey.key;
