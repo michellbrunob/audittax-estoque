@@ -1084,32 +1084,47 @@ function App() {
 function MovementForm({ title, items, onSubmit }) { const [form, setForm] = useState({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), notes: '' }); return <section className="panel"><div className="panel-head"><div><h3>{title}</h3><p>Registro de movimentacao de estoque</p></div></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSubmit({ itemId: Number(form.itemId), quantity: Number(form.quantity), date: form.date, notes: form.notes }); setForm({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), notes: '' }); }}><Field label="Item"><select value={form.itemId} onChange={(event) => setForm({ ...form, itemId: event.target.value })}>{items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><Field label="Quantidade"><input type="number" min="0.01" step="0.01" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} /></Field><Field label="Data"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><Field label="Observacao"><input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar</button></div></form></section>; }
 function ExtraForm({ items, entries, onSubmit, itemsById, suppliers, suppliersById }) { const [form, setForm] = useState({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), cost: '', reason: '', supplierId: String(suppliers[0]?.id || ''), location: '' }); return <><section className="panel"><div className="panel-head"><div><h3>Registrar reposicao avulsa</h3><p>Compras fora do ciclo fixo com custo e motivo</p></div></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSubmit({ itemId: Number(form.itemId), quantity: Number(form.quantity), date: form.date, cost: Number(form.cost || 0), reason: form.reason, supplierId: Number(form.supplierId), location: '' }); setForm({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), cost: '', reason: '', supplierId: String(suppliers[0]?.id || ''), location: '' }); }}><Field label="Item"><select value={form.itemId} onChange={(event) => setForm({ ...form, itemId: event.target.value })}>{items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><Field label="Quantidade"><input type="number" min="0.01" step="0.01" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} /></Field><Field label="Data"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><Field label="Custo"><input type="number" min="0" step="0.01" value={form.cost} onChange={(event) => setForm({ ...form, cost: event.target.value })} /></Field><Field label="Motivo"><input value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></Field><Field label="Fornecedor"><select value={form.supplierId} onChange={(event) => setForm({ ...form, supplierId: event.target.value })}>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar reposicao</button></div></form></section><section className="panel"><div className="panel-head"><div><h3>Historico de reposicoes avulsas</h3><p>Compras fora do planejamento</p></div></div><div className="stack">{entries.map((entry) => <div className="entry-card" key={entry.id}><div><strong>{itemsById[entry.itemId]?.name || 'Item removido'}</strong><p>{entry.reason}</p></div><div className="entry-meta"><span>{entry.quantity} {itemsById[entry.itemId]?.unit || ''}</span><span>{currency(entry.cost)}</span><span>{formatDate(entry.date)}</span><span>{suppliersById[entry.supplierId]?.name || entry.location || 'Fornecedor nao informado'}</span></div></div>)}</div></section></>; }
 function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete }) {
-  const emptyForm = { id: null, name: '', unit: 'un', quantity: 0, minStock: 1, weeklyConsumption: 0 };
-  const [form, setForm] = useState(emptyForm);
-  const isEditing = Boolean(form.id);
-  const resetForm = () => setForm(emptyForm);
-  const handleSubmit = (event) => {
+  const emptyForm = { name: '', unit: 'un', quantity: 0, minStock: 1, weeklyConsumption: 0 };
+  const [addForm, setAddForm] = useState(emptyForm);
+  const [editItem, setEditItem] = useState(null);
+  const handleAdd = (event) => {
     event.preventDefault();
-    if (!form.name.trim()) return;
-    const payload = { name: form.name.trim(), unit: form.unit, quantity: Number(form.quantity || 0), minStock: Number(form.minStock || 1), weeklyConsumption: Number(form.weeklyConsumption || 0) };
-    if (isEditing) { onUpdate(form.id, payload); } else { onAdd(payload); }
-    resetForm();
+    if (!addForm.name.trim()) return;
+    onAdd({ name: addForm.name.trim(), unit: addForm.unit, quantity: Number(addForm.quantity || 0), minStock: Number(addForm.minStock || 1), weeklyConsumption: Number(addForm.weeklyConsumption || 0) });
+    setAddForm(emptyForm);
   };
-  return <><section className="panel"><div className="panel-head"><div><h3>{isEditing ? 'Editar item' : 'Cadastrar novo item'}</h3><p>Produtos monitorados no estoque do setor</p></div>{isEditing ? <button className="ghost-button" type="button" onClick={resetForm}>Cancelar</button> : null}</div>
-    <form className="form-grid" onSubmit={handleSubmit}>
-      <Field label="Nome do item"><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ex: Detergente, Papel toalha" required /></Field>
-      <Field label="Unidade"><select value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })}>{UNIT_OPTIONS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}</select></Field>
-      <Field label="Quantidade atual"><input type="number" min="0" step="0.01" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></Field>
-      <Field label="Estoque minimo"><input type="number" min="0" step="1" value={form.minStock} onChange={(e) => setForm({ ...form, minStock: e.target.value })} /></Field>
-      <Field label="Consumo semanal"><input type="number" min="0" step="0.1" value={form.weeklyConsumption} onChange={(e) => setForm({ ...form, weeklyConsumption: e.target.value })} /></Field>
-      <div className="actions-row"><button className="primary-button" type="submit">{isEditing ? 'Salvar alteracoes' : 'Cadastrar item'}</button></div>
+  const handleEditSave = (event) => {
+    event.preventDefault();
+    if (!editItem?.name?.trim()) return;
+    onUpdate(editItem.id, { name: editItem.name.trim(), unit: editItem.unit, quantity: Number(editItem.quantity || 0), minStock: Number(editItem.minStock || 1), weeklyConsumption: Number(editItem.weeklyConsumption || 0) });
+    setEditItem(null);
+  };
+  return <><section className="panel"><div className="panel-head"><div><h3>Cadastrar novo item</h3><p>Produtos monitorados no estoque do setor</p></div></div>
+    <form className="form-grid" onSubmit={handleAdd}>
+      <Field label="Nome do item"><input value={addForm.name} onChange={(e) => setAddForm({ ...addForm, name: e.target.value })} placeholder="Ex: Detergente, Papel toalha" required /></Field>
+      <Field label="Unidade"><select value={addForm.unit} onChange={(e) => setAddForm({ ...addForm, unit: e.target.value })}>{UNIT_OPTIONS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}</select></Field>
+      <Field label="Quantidade atual"><input type="number" min="0" step="0.01" value={addForm.quantity} onChange={(e) => setAddForm({ ...addForm, quantity: e.target.value })} /></Field>
+      <Field label="Estoque minimo"><input type="number" min="0" step="1" value={addForm.minStock} onChange={(e) => setAddForm({ ...addForm, minStock: e.target.value })} /></Field>
+      <Field label="Consumo semanal"><input type="number" min="0" step="0.1" value={addForm.weeklyConsumption} onChange={(e) => setAddForm({ ...addForm, weeklyConsumption: e.target.value })} /></Field>
+      <div className="actions-row"><button className="primary-button" type="submit">Cadastrar item</button></div>
     </form></section>
     <section className="panel"><div className="panel-head"><div><h3>Itens cadastrados</h3><p>Lista completa do estoque monitorado</p></div><Badge tone="info">{items.length} item(ns)</Badge></div>
     <div className="table-wrap"><table><thead><tr><th>Item</th><th>Unidade</th><th>Quantidade</th><th>Minimo</th><th>Consumo semanal</th><th>Movimentacoes</th><th>Acoes</th></tr></thead><tbody>{items.map((item) => {
       const moveCount = movements.filter((m) => m.itemId === item.id).length;
       const priceCount = priceHistory.filter((p) => p.itemId === item.id).length;
-      return <tr key={item.id}><td><strong>{item.name}</strong></td><td>{item.unit}</td><td>{item.quantity}</td><td>{item.minStock}</td><td>{item.weeklyConsumption}</td><td>{moveCount} mov. / {priceCount} preco(s)</td><td><div className="table-actions"><button className="ghost-button" type="button" onClick={() => setForm({ id: item.id, name: item.name, unit: item.unit, quantity: item.quantity, minStock: item.minStock, weeklyConsumption: item.weeklyConsumption || 0 })}>Editar</button><button className="table-action" type="button" onClick={() => onDelete(item.id)}>Excluir</button></div></td></tr>;
-    })}</tbody></table></div></section></>;
+      return <tr key={item.id}><td><strong>{item.name}</strong></td><td>{item.unit}</td><td>{item.quantity}</td><td>{item.minStock}</td><td>{item.weeklyConsumption}</td><td>{moveCount} mov. / {priceCount} preco(s)</td><td><div className="table-actions"><button className="ghost-button" type="button" onClick={() => setEditItem({ id: item.id, name: item.name, unit: item.unit, quantity: item.quantity, minStock: item.minStock, weeklyConsumption: item.weeklyConsumption || 0 })}>Editar</button><button className="table-action" type="button" onClick={() => onDelete(item.id)}>Excluir</button></div></td></tr>;
+    })}</tbody></table></div></section>
+    {editItem ? <div className="modal-overlay"><div className="modal-content">
+      <div className="panel-head"><div><h3>Editar item</h3><p>Altere os dados e salve ou cancele.</p></div></div>
+      <form className="form-grid" onSubmit={handleEditSave}>
+        <Field label="Nome do item"><input value={editItem.name} onChange={(e) => setEditItem({ ...editItem, name: e.target.value })} required /></Field>
+        <Field label="Unidade"><select value={editItem.unit} onChange={(e) => setEditItem({ ...editItem, unit: e.target.value })}>{UNIT_OPTIONS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}</select></Field>
+        <Field label="Quantidade atual"><input type="number" min="0" step="0.01" value={editItem.quantity} onChange={(e) => setEditItem({ ...editItem, quantity: e.target.value })} /></Field>
+        <Field label="Estoque minimo"><input type="number" min="0" step="1" value={editItem.minStock} onChange={(e) => setEditItem({ ...editItem, minStock: e.target.value })} /></Field>
+        <Field label="Consumo semanal"><input type="number" min="0" step="0.1" value={editItem.weeklyConsumption} onChange={(e) => setEditItem({ ...editItem, weeklyConsumption: e.target.value })} /></Field>
+        <div className="actions-row"><button className="primary-button" type="submit">Salvar alteracoes</button><button className="ghost-button" type="button" onClick={() => setEditItem(null)}>Cancelar</button></div>
+      </form>
+    </div></div> : null}</>;
 }
 
 function ReaderPanel({ state, items, suppliers, onAnalyze, onConfirm, onDraftChange, onSupplierChange, onAccessKeyChange, onAddSupplier, onReset }) {
