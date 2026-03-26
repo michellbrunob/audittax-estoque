@@ -827,6 +827,20 @@ app.post('/nfce/upload', upload.single('file'), async (req, res) => {
       dependencies = resultadoImagem.dependencies;
     }
 
+    // Tenta resolver a chave ANTES de verificar dependências —
+    // QR Code (ZXing/jsQR) não precisa de Anthropic nem Tesseract.
+    const melhorPrecoce = escolherMelhorChave({ qrResult, pdfInfo, claudeInfo, ocrInfo });
+    if (melhorPrecoce) {
+      return res.json({
+        chaveAcesso: melhorPrecoce.chaveAcesso,
+        fonte: melhorPrecoce.fonte,
+        confianca: melhorPrecoce.confianca,
+        candidatas: melhorPrecoce.candidatas,
+        parsedReceipt,
+        dependencies,
+      });
+    }
+
     if (
       !dependencies.anthropic.configured &&
       !dependencies.tesseract.installed &&
@@ -835,9 +849,17 @@ app.post('/nfce/upload', upload.single('file'), async (req, res) => {
       return res.status(503).json({
         error: 'Nenhum motor de leitura esta disponivel. Configure a Anthropic API ou instale o Tesseract OCR.',
         dependencies,
+        candidatas: [
+          ...new Set([
+            ...(qrResult?.candidatas || []),
+            ...(pdfInfo?.candidatas || []),
+          ]),
+        ],
       });
     }
 
+    // Se chegou aqui, melhorPrecoce era null mas temos Anthropic/Tesseract.
+    // Tenta novamente (OCR/Claude podem ter rodado agora).
     const melhor = escolherMelhorChave({ qrResult, pdfInfo, claudeInfo, ocrInfo });
 
     if (!melhor) {
