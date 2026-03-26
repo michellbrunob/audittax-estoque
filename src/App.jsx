@@ -513,13 +513,41 @@ const buildOcrVariants = async (dataUrl, qrBox = null) => {
   }
   return rendered;
 };
+const extractChaveFromUrl = (url) => {
+  const text = String(url || '');
+  const matchChNFe = text.match(/[?&](?:chNFe|p)=(\d{44})/i);
+  if (matchChNFe && validateAccessKey(matchChNFe[1])) return matchChNFe[1];
+  const matchPath = text.match(/\/(\d{44})(?:[/?&#]|$)/);
+  if (matchPath && validateAccessKey(matchPath[1])) return matchPath[1];
+  const matchP = text.match(/[?&]p=([^&]+)/i);
+  if (matchP) {
+    const digits = decodeURIComponent(matchP[1]).replace(/\D/g, '');
+    if (digits.length >= 44 && validateAccessKey(digits.slice(0, 44))) return digits.slice(0, 44);
+  }
+  return '';
+};
 const chooseBestAccessKey = ({ ocrText, qrRawValue }) => {
+  console.log('[chooseBestAccessKey] qrRawValue:', qrRawValue ? qrRawValue.slice(0, 120) : '(vazio)');
+
+  // 1. Tenta extrair chave da URL do QR Code
+  if (qrRawValue) {
+    const urlKey = extractChaveFromUrl(qrRawValue);
+    if (urlKey) {
+      console.log('[chooseBestAccessKey] Chave extraida da URL do QR:', urlKey);
+      return { key: urlKey, source: 'QR Code (URL)', valid: true, candidates: [urlKey] };
+    }
+  }
+
+  // 2. Tenta candidatas do QR (sequencias de 44 digitos)
   const qrRawCandidates = extractAccessKeyCandidates(qrRawValue);
   const qrCandidates = qrRawCandidates.filter(validateAccessKey);
+  console.log('[chooseBestAccessKey] QR candidatas:', qrRawCandidates.length, 'validas:', qrCandidates.length);
   if (qrCandidates.length) return { key: qrCandidates[0], source: 'QR Code', valid: true, candidates: qrRawCandidates };
 
+  // 3. Tenta candidatas do OCR
   const ocrRawCandidates = extractAccessKeyCandidates(ocrText);
   const ocrCandidates = ocrRawCandidates.filter(validateAccessKey);
+  console.log('[chooseBestAccessKey] OCR candidatas:', ocrRawCandidates.length, 'validas:', ocrCandidates.length);
 
   if (ocrCandidates.length) {
     // Prioriza chave encontrada perto do rótulo "Chave de Acesso"
@@ -529,14 +557,34 @@ const chooseBestAccessKey = ({ ocrText, qrRawValue }) => {
         const window = lines.slice(i, i + 5).join(' ');
         const windowDigits = window.replace(/\D/g, '');
         const contextKey = ocrCandidates.find((k) => windowDigits.includes(k));
-        if (contextKey) return { key: contextKey, source: 'OCR', valid: true, candidates: ocrRawCandidates };
+        if (contextKey) {
+          console.log('[chooseBestAccessKey] Chave contextual (perto de "Chave de Acesso"):', contextKey);
+          return { key: contextKey, source: 'OCR', valid: true, candidates: ocrRawCandidates };
+        }
       }
     }
     return { key: ocrCandidates[0], source: 'OCR', valid: true, candidates: ocrRawCandidates };
   }
 
+  // 4. Fallback: candidatas nao validadas (melhor que nada)
   if (qrRawCandidates.length) return { key: qrRawCandidates[0], source: 'QR Code', valid: false, candidates: qrRawCandidates };
+
+  // 5. OCR contextual sem validação - busca chave perto do rótulo mesmo sem validar checksum
+  const lines = String(ocrText || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/chave\s+de\s+acesso/i.test(lines[i])) {
+      const window = lines.slice(i, i + 5).join(' ');
+      const windowDigits = window.replace(/\D/g, '');
+      if (windowDigits.length >= 44) {
+        const candidate = windowDigits.slice(0, 44);
+        console.log('[chooseBestAccessKey] Chave contextual nao validada:', candidate);
+        return { key: candidate, source: 'OCR (nao validada)', valid: false, candidates: [candidate, ...ocrRawCandidates.slice(0, 5)] };
+      }
+    }
+  }
+
   if (ocrRawCandidates.length) return { key: ocrRawCandidates[0], source: 'OCR', valid: false, candidates: ocrRawCandidates };
+  console.log('[chooseBestAccessKey] Nenhuma chave encontrada');
   return { key: '', source: '', valid: false, candidates: [] };
 };
 const fileToDataUrl = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('Falha ao ler o arquivo.')); reader.readAsDataURL(file); });
@@ -701,8 +749,10 @@ function App() {
       let backendWarning = '';
       try {
         backendKeyResult = await detectAccessKeyWithBackend(file);
+        console.log('[Entrada] Backend respondeu:', JSON.stringify({ chaveAcesso: backendKeyResult?.chaveAcesso, fonte: backendKeyResult?.fonte, candidatas: backendKeyResult?.candidatas?.length, backendOk: backendKeyResult?.backendOk }));
       } catch (backendError) {
         backendWarning = backendError.message || 'Falha ao consultar o backend da NFC-e.';
+        console.warn('[Entrada] Backend falhou:', backendWarning);
       }
       const variants = await buildOcrVariants(previewDataUrl || fileDataUrl, qrData.boundingBox);
       worker = await createWorker('por');
@@ -711,9 +761,11 @@ function App() {
         const result = await worker.recognize(variant.dataUrl);
         ocrTexts.push(result.data.text || '');
       }
-      const combinedOcrText = ocrTexts.join('\\n');
+      const combinedOcrText = ocrTexts.join('\n');
+      console.log('[Entrada] QR detectado:', qrData.rawValue ? 'Sim (' + qrData.rawValue.slice(0, 80) + '...)' : 'Nao');
       const bestKey = chooseBestAccessKey({ ocrText: combinedOcrText, qrRawValue: qrData.rawValue });
       const resolvedAccessKey = backendKeyResult?.chaveAcesso || backendKeyResult?.bestEffortKey || backendKeyResult?.candidatas?.[0] || bestKey.key;
+      console.log('[Entrada] Chave resolvida:', resolvedAccessKey || '(nenhuma)', '| Fonte:', backendKeyResult?.fonte || bestKey.source || '(nenhuma)');
       const resolvedAccessKeySource = backendKeyResult?.fonte ? backendSourceLabel(backendKeyResult.fonte) : bestKey.source;
       const resolvedAccessKeyValid = backendKeyResult?.validada !== undefined ? backendKeyResult.validada : (backendKeyResult?.chaveAcesso ? true : bestKey.valid);
       const resolvedAccessKeyCandidates = [...new Set([...(backendKeyResult?.candidatas || []), ...(bestKey.candidates || [])])];
