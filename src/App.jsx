@@ -52,10 +52,19 @@ const detectAccessKeyWithBackend = async (file) => {
   }
   const formData = new FormData();
   formData.append('file', file);
-  const response = await fetch(NFCE_EXTRACT_API_URL, { method: 'POST', body: formData });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok && !data.bestEffortKey && !(data.candidatas || []).length) throw new Error(data.error || 'Falha ao consultar o backend da NFC-e.');
-  return { ...data, backendOk: response.ok };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
+  try {
+    const response = await fetch(NFCE_EXTRACT_API_URL, { method: 'POST', body: formData, signal: controller.signal });
+    clearTimeout(timeout);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok && !data.bestEffortKey && !(data.candidatas || []).length) throw new Error(data.error || 'Falha ao consultar o backend da NFC-e.');
+    return { ...data, backendOk: response.ok };
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('Backend NFC-e nao respondeu em 5s.');
+    throw err;
+  }
 };
 const backendSourceLabel = (source) => ({ qrcode: 'QR Code', 'pdf-texto': 'PDF texto', claude: 'Claude Vision', ocr: 'OCR backend' }[source] || source || 'OCR local');
 
@@ -894,7 +903,9 @@ function App() {
           return;
         }
         const pdfText = await extractPdfTextFromFile(file);
+        console.log('[PDF] Texto extraido:', pdfText.length, 'chars, primeiras 500:', pdfText.slice(0, 500));
         const parsedPdf = parseNativePdfReceiptText(pdfText, state.items);
+        console.log('[PDF] Resultado parse:', parsedPdf.items?.length, 'itens, chave:', parsedPdf.accessKey ? 'SIM' : 'NAO', 'total:', parsedPdf.total);
         if (parsedPdf.items?.length) {
           const draftItems = consolidateDraftItems(parsedPdf.items, state.items);
           const supplierMatch = findExistingSupplier(parsedPdf.mercado, state.suppliers);
