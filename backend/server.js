@@ -1,4 +1,4 @@
-require('dotenv').config();
+﻿require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
@@ -159,7 +159,7 @@ function extrairChavesDoTexto(texto) {
 function extrairChaveDeUrl(qrData) {
   const texto = String(qrData || '');
 
-  // Tenta parâmetro chNFe na URL (formato padrão SEFAZ)
+  // Tenta parÃ¢metro chNFe na URL (formato padrÃ£o SEFAZ)
   const matchChNFe = texto.match(/[?&](?:chNFe|p)=(\d{44})/i);
   if (matchChNFe && validarChaveAcesso(matchChNFe[1])) {
     return matchChNFe[1];
@@ -171,7 +171,7 @@ function extrairChaveDeUrl(qrData) {
     return matchPath[1];
   }
 
-  // Tenta parâmetro p= com pipe-separated (formato compacto NFC-e)
+  // Tenta parÃ¢metro p= com pipe-separated (formato compacto NFC-e)
   const matchP = texto.match(/[?&]p=([^&]+)/i);
   if (matchP) {
     const valorP = decodeURIComponent(matchP[1]);
@@ -291,14 +291,14 @@ function extrairJson(texto) {
 }
 
 function processarResultadoQr(rawData, fonte) {
-  // Tenta extrair chave via parâmetros da URL primeiro
+  // Tenta extrair chave via parÃ¢metros da URL primeiro
   const chaveUrl = extrairChaveDeUrl(rawData);
   if (chaveUrl) {
     console.log(`[QR] Chave extraida via URL (${fonte})`);
     return { raw: rawData, chave: chaveUrl, candidatas: [chaveUrl], erro: '' };
   }
 
-  // Fallback: busca sequências de 44 dígitos no texto bruto
+  // Fallback: busca sequÃªncias de 44 dÃ­gitos no texto bruto
   const candidatas = extrairSequencias44(rawData);
   const digitosPuros = apenasDigitos(rawData);
   if (digitosPuros.length >= 44) {
@@ -339,7 +339,7 @@ async function lerQrCodeZXing(bufferImagem) {
       .extract({ left: 0, top: Math.floor(height * 0.45), width, height: Math.floor(height * 0.55) })
       .png().toBuffer(),
 
-    // 3. Terço inferior + upscale 2x (QR pequeno)
+    // 3. TerÃ§o inferior + upscale 2x (QR pequeno)
     () => {
       const cropH = Math.floor(height * 0.35);
       return sharp(bufferImagem)
@@ -369,7 +369,7 @@ async function lerQrCodeZXing(bufferImagem) {
         return processarResultadoQr(results[0].text, `zxing-variante-${i + 1}`);
       }
     } catch {
-      // Variante falhou, próxima
+      // Variante falhou, prÃ³xima
     }
   }
 
@@ -417,7 +417,7 @@ async function lerQrCodeJsQR(bufferImagem) {
         return processarResultadoQr(qr.data, `jsqr-tentativa-${i + 1}`);
       }
     } catch {
-      // próxima
+      // prÃ³xima
     }
   }
 
@@ -432,7 +432,7 @@ async function lerQrCodeDaImagem(bufferImagem) {
       return resultadoZxing;
     }
 
-    // 2. Fallback para jsQR com pré-processamento
+    // 2. Fallback para jsQR com prÃ©-processamento
     const resultadoJsQR = await lerQrCodeJsQR(bufferImagem);
     if (resultadoJsQR) {
       return resultadoJsQR;
@@ -827,8 +827,8 @@ app.post('/nfce/upload', upload.single('file'), async (req, res) => {
       dependencies = resultadoImagem.dependencies;
     }
 
-    // Tenta resolver a chave ANTES de verificar dependências —
-    // QR Code (ZXing/jsQR) não precisa de Anthropic nem Tesseract.
+    // Tenta resolver a chave ANTES de verificar dependÃªncias â€”
+    // QR Code (ZXing/jsQR) nÃ£o precisa de Anthropic nem Tesseract.
     const melhorPrecoce = escolherMelhorChave({ qrResult, pdfInfo, claudeInfo, ocrInfo });
     if (melhorPrecoce) {
       return res.json({
@@ -916,9 +916,9 @@ app.post('/nfce/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-// REST API — Persistência SQLite
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// REST API â€” PersistÃªncia SQLite
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const Q = require('./db/queries.js');
 const { RECEIPTS_DIR } = Q;
 const receiptUpload = multer({ storage: multer.diskStorage({
@@ -929,29 +929,29 @@ const receiptUpload = multer({ storage: multer.diskStorage({
 // Estado completo (carga inicial)
 app.get('/api/state', (_, res) => { try { res.json(Q.getFullState()); } catch (e) { res.status(500).json({ error: e.message }); } });
 
-// Migração do localStorage
+// MigraÃ§Ã£o do localStorage
 app.post('/api/migrate', (req, res) => { try { const result = Q.migrateFromLocalStorage(req.body); res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
 
-// ─── Items ───
+// â”€â”€â”€ Items â”€â”€â”€
 app.get('/api/items', (_, res) => res.json(Q.getAllItems()));
 app.post('/api/items', (req, res) => { try { res.json(Q.insertItem(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.put('/api/items/:id', (req, res) => { try { res.json(Q.updateItem(Number(req.params.id), req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.delete('/api/items/:id', (req, res) => { try { Q.deleteItem(Number(req.params.id)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.patch('/api/items/:id/consumption', (req, res) => { try { Q.updateItemConsumption(Number(req.params.id), Number(req.body.weeklyConsumption)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
 
-// ─── Movements ───
+// â”€â”€â”€ Movements â”€â”€â”€
 app.get('/api/movements', (_, res) => res.json(Q.getAllMovements()));
 app.post('/api/movements', (req, res) => { try { res.json(Q.insertMovement(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
 
-// ─── Prices ───
+// â”€â”€â”€ Prices â”€â”€â”€
 app.get('/api/prices', (_, res) => res.json(Q.getAllPrices()));
 app.post('/api/prices', (req, res) => { try { res.json(Q.insertPrice(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
 
-// ─── Extra Purchases ───
+// â”€â”€â”€ Extra Purchases â”€â”€â”€
 app.get('/api/extras', (_, res) => res.json(Q.getAllExtras()));
 app.post('/api/extras', (req, res) => { try { res.json(Q.insertExtra(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
 
-// ─── Receipts ───
+// â”€â”€â”€ Receipts â”€â”€â”€
 app.get('/api/receipts', (_, res) => res.json(Q.getAllReceipts()));
 app.post('/api/receipts', receiptUpload.single('file'), (req, res) => {
   try {
@@ -973,17 +973,31 @@ app.get('/api/receipts/:id/file', (req, res) => {
 });
 app.delete('/api/receipts/:id', (req, res) => { try { Q.deleteReceipt(Number(req.params.id)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
 
-// ─── Suppliers ───
+// â”€â”€â”€ Suppliers â”€â”€â”€
 app.get('/api/suppliers', (_, res) => res.json(Q.getAllSuppliers()));
 app.post('/api/suppliers', (req, res) => { try { res.json(Q.insertSupplier(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.put('/api/suppliers/:id', (req, res) => { try { res.json(Q.updateSupplier(Number(req.params.id), req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.delete('/api/suppliers/:id', (req, res) => { try { const r = Q.deleteSupplier(Number(req.params.id)); if (r.error) return res.status(409).json(r); res.json(r); } catch (e) { res.status(400).json({ error: e.message }); } });
 
-// ─── Cycle & Settings ───
+// â”€â”€â”€ Cycle & Settings â”€â”€â”€
 app.put('/api/cycle', (req, res) => { try { res.json(Q.updateCycle(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.put('/api/settings', (req, res) => { try { res.json(Q.updateSettings(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
 
-// ─── Batch Import (confirmReaderImport) ───
+// â”€â”€â”€ Maintenance â”€â”€â”€
+app.get('/api/maintenance/assets', (_, res) => { try { res.json(Q.getAllAssets()); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.post('/api/maintenance/assets', (req, res) => { try { res.json(Q.insertAsset(req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
+app.put('/api/maintenance/assets/:id', (req, res) => { try { res.json(Q.updateAsset(Number(req.params.id), req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
+app.delete('/api/maintenance/assets/:id', (req, res) => { try { Q.deleteAsset(Number(req.params.id)); res.json({ ok: true }); } catch(e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/maintenance/records', (_, res) => { try { res.json(Q.getAllRecords()); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.post('/api/maintenance/records', (req, res) => { try { res.json(Q.insertRecord(req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
+app.delete('/api/maintenance/records/:id', (req, res) => { try { Q.deleteRecord(Number(req.params.id)); res.json({ ok: true }); } catch(e) { res.status(400).json({ error: e.message }); } });
+
+// â”€â”€â”€ Batch Import (confirmReaderImport) â”€â”€â”€
+// ─── IT Inventory ───
+app.get('/api/inventory/assets', (_, res) => { try { res.json(Q.getAllInventoryAssets()); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.post('/api/inventory/assets', (req, res) => { try { res.json(Q.insertInventoryAsset(req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
+app.put('/api/inventory/assets/:id', (req, res) => { try { res.json(Q.updateInventoryAsset(Number(req.params.id), req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
+app.delete('/api/inventory/assets/:id', (req, res) => { try { Q.deleteInventoryAsset(Number(req.params.id)); res.json({ ok: true }); } catch(e) { res.status(400).json({ error: e.message }); } });
 app.post('/api/import-receipt', receiptUpload.single('file'), (req, res) => {
   try {
     const data = req.body.data ? JSON.parse(req.body.data) : req.body;
@@ -995,9 +1009,22 @@ app.post('/api/import-receipt', receiptUpload.single('file'), (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// Serve o frontend buildado (dist/) â€” acesse http://localhost:PORT
+const DIST_DIR = path.join(__dirname, '..', 'dist');
+if (require('fs').existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR));
+  // SPA fallback: qualquer rota desconhecida retorna o index.html
+  app.get('*', (_, res) => res.sendFile(path.join(DIST_DIR, 'index.html')));
+}
+
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`API NFC-e + REST pronta em http://0.0.0.0:${PORT}`);
+  console.log(`\nâ•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—`);
+  console.log(`â•‘  Audittax â€” Controle de Estoque          â•‘`);
+  console.log(`â•‘  http://localhost:${PORT}                   â•‘`);
+  console.log(`â•‘  API REST + Frontend prontos             â•‘`);
+  console.log(`â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n`);
 });
+
 
 
 

@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createWorker } from 'tesseract.js';
 import QrScanner from 'qr-scanner';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
-// Chave do localStorage legado — usada apenas na migração para SQLite
+// Chave do localStorage legado; usada apenas na migracao para SQLite
 const STORAGE_KEY = 'controle-limpeza-react-v1';
 const todayString = () => new Date().toISOString().split('T')[0];
 const formatDate = (value) => { try { const d = new Date(`${value}T12:00:00`); return isNaN(d.getTime()) ? '--/--/----' : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }); } catch { return '--/--/----'; } };
@@ -88,6 +88,39 @@ const UNIT_OPTIONS = [
   { value: 'cm', label: 'Centimetro (cm)', family: 'length', factor: 0.01 }
 ];
 const UNIT_MAP = Object.fromEntries(UNIT_OPTIONS.map((unit) => [unit.value, unit]));
+const PACK_UNITS = [
+  { label: 'Sem embalagem', value: '', defaultSize: 1 },
+  { label: 'Pacote', value: 'Pacote', defaultSize: 4 },
+  { label: 'Fardo', value: 'Fardo', defaultSize: 12 },
+  { label: 'Caixa', value: 'Caixa', defaultSize: 12 },
+  { label: 'Galao', value: 'Galao', defaultSize: 5 },
+  { label: 'Frasco', value: 'Frasco', defaultSize: 1 },
+  { label: 'Saco', value: 'Saco', defaultSize: 1 },
+  { label: 'Bandeja', value: 'Bandeja', defaultSize: 6 },
+  { label: 'Display', value: 'Display', defaultSize: 24 },
+  { label: 'Duzia', value: 'Duzia', defaultSize: 12 },
+];
+const CONSUMPTION_PROFILES = [
+  { value: 'escritorio', label: 'Escritório', mult: 1.0 },
+  { value: 'escola', label: 'Escola', mult: 1.3 },
+  { value: 'fabrica', label: 'Fábrica', mult: 1.5 },
+  { value: 'restaurante', label: 'Restaurante', mult: 1.8 },
+  { value: 'hospital', label: 'Hospital', mult: 2.5 },
+  { value: 'comercio', label: 'Comércio', mult: 1.2 },
+];
+const DEFAULT_CONSUMPTION_RATES = [
+  { id: 'papel_hig',   name: 'Papel higiênico',     unit: 'rl', category: 'Banheiro', basis: 'person',         rateBase: 0.25, femaleFactor: 1.4, keyword: 'papel' },
+  { id: 'papel_toa',   name: 'Papel toalha',        unit: 'rl', category: 'Banheiro', basis: 'bathroom_clean', rateBase: 0.5,  femaleFactor: 1.0, keyword: 'toalha' },
+  { id: 'sabao_liq',   name: 'Sabão líquido (mL)',  unit: 'ml', category: 'Banheiro', basis: 'person',         rateBase: 15,   femaleFactor: 1.0, keyword: 'sabao' },
+  { id: 'alcool_gel',  name: 'Álcool gel (mL)',     unit: 'ml', category: 'Limpeza',  basis: 'person',         rateBase: 5,    femaleFactor: 1.0, keyword: 'alcool' },
+  { id: 'desinfet',    name: 'Desinfetante (mL)',   unit: 'ml', category: 'Limpeza',  basis: 'bathroom_clean', rateBase: 80,   femaleFactor: 1.0, keyword: 'desinfet' },
+  { id: 'detergente',  name: 'Detergente (mL)',     unit: 'ml', category: 'Limpeza',  basis: 'bathroom_clean', rateBase: 20,   femaleFactor: 1.0, keyword: 'detergent' },
+  { id: 'limpa_piso',  name: 'Limpa-piso (mL)',     unit: 'ml', category: 'Limpeza',  basis: 'bathroom_clean', rateBase: 60,   femaleFactor: 1.0, keyword: 'piso' },
+  { id: 'saco_lixo',   name: 'Saco de lixo',        unit: 'un', category: 'Limpeza',  basis: 'bathroom_day',   rateBase: 1,    femaleFactor: 1.0, keyword: 'lixo' },
+  { id: 'cafe',        name: 'Café (g)',            unit: 'g',  category: 'Copa',     basis: 'person',         rateBase: 14,   femaleFactor: 1.0, keyword: 'cafe' },
+  { id: 'acucar',      name: 'Açúcar (g)',          unit: 'g',  category: 'Copa',     basis: 'person',         rateBase: 10,   femaleFactor: 1.0, keyword: 'acucar' },
+  { id: 'copo_desc',   name: 'Copo descartável',    unit: 'un', category: 'Copa',     basis: 'person',         rateBase: 3,    femaleFactor: 1.0, keyword: 'copo' },
+];
 const normalizeUnit = (raw) => {
   const value = slug(raw).replace(/[^a-z]/g, '');
   const aliases = {
@@ -129,7 +162,7 @@ const initialState = {
   ],
   receipts: [
     { id: 1, title: 'NF-001 Marco', value: 87.5, date: '2026-03-01', notes: 'Compra semanal' },
-    { id: 2, title: 'NF-002 Marco', value: 145, date: '2026-03-15', notes: 'Reposicao geral' }
+    { id: 2, title: 'NF-002 Marco', value: 145, date: '2026-03-15', notes: 'Reposição geral' }
   ],
   suppliers: [
     { id: 1, name: 'Atacadao', tradeName: 'Atacadao', type: 'atacado', city: 'Sao Paulo', state: 'SP', cnpj: '', notes: '', active: true },
@@ -138,7 +171,10 @@ const initialState = {
   ],
   cycle: { lastPurchaseDate: '2026-03-06', intervalDays: 60 },
   settings: { receiptPassword: '1234', anthropicApiKey: '' },
-  counters: { item: 7, movement: 5, price: 5, extraPurchase: 3, receipt: 3, supplier: 4 }
+  counters: { item: 7, movement: 5, price: 5, extraPurchase: 3, receipt: 3, supplier: 4 },
+  maintenanceAssets: [],
+  maintenanceRecords: [],
+  inventoryAssets: []
 };
 
 const hydrateState = (raw) => {
@@ -154,7 +190,10 @@ const hydrateState = (raw) => {
     suppliers: Array.isArray(raw.suppliers) ? raw.suppliers : initialState.suppliers,
     cycle: raw.cycle && typeof raw.cycle === 'object' ? { ...initialState.cycle, ...raw.cycle } : initialState.cycle,
     settings: raw.settings && typeof raw.settings === 'object' ? { ...initialState.settings, ...raw.settings } : initialState.settings,
-    counters: raw.counters && typeof raw.counters === 'object' ? { ...initialState.counters, ...raw.counters } : initialState.counters
+    counters: raw.counters && typeof raw.counters === 'object' ? { ...initialState.counters, ...raw.counters } : initialState.counters,
+    maintenanceAssets: Array.isArray(raw.maintenanceAssets) ? raw.maintenanceAssets : initialState.maintenanceAssets,
+    maintenanceRecords: Array.isArray(raw.maintenanceRecords) ? raw.maintenanceRecords : initialState.maintenanceRecords,
+    inventoryAssets: Array.isArray(raw.inventoryAssets) ? raw.inventoryAssets : initialState.inventoryAssets
   };
 };
 
@@ -350,23 +389,23 @@ const parseNativePdfReceiptText = (text, items) => {
   console.log('[PDF Parser] Total de linhas extraidas:', lines.length);
   console.log('[PDF Parser] Primeiras 30 linhas:', lines.slice(0, 30));
 
-  // Padrão 1: DANFE NFC-e padrão SEFAZ — "COD DESCRICAO QTD UN VL_UNIT VL_TOTAL"
+  // Padrao 1: DANFE NFC-e padrao SEFAZ - "COD DESCRICAO QTD UN VL_UNIT VL_TOTAL"
   // Ex: "1257654 LIMP PERF UAU ING 1,000 UN 14,97 14,97"
   // Ex: "0376914 CAFE MARATA 500g 20,000 UN 33,97 679,40"
   const patItemLine = /^(\d{4,})\s+(.+?)\s+(\d+[.,]\d{1,3})\s+(UN|KG|LT|ML|PCT|CX|GR|G|L|PC|DZ|MT|M)\s+([\d.,]+)\s+([\d.,]+)$/i;
 
-  // Padrão 2: SEFAZ-TO / Assaí — "Código: XXXQtde.: Y VL. Unit.:Z"
-  // Linha completa: "Código: 1136158Qtde.: 1.0 VL. Unit.:9.9"
+  // Padrao 2: SEFAZ-TO / Assai - "Codigo: XXXQtde.: Y VL. Unit.:Z"
+  // Linha completa: "Codigo: 1136158Qtde.: 1.0 VL. Unit.:9.9"
   // Nome fica 2 linhas acima, total 1 linha acima
   const patSefazTo = /C.digo:\s*(\d+)\s*Qtde\.?:\s*([\d.,]+)\s*VL\.?\s*Unit\.?:\s*([\d.,]+)/i;
 
-  // Padrão 3: Formato inline "Qtde: X x Vl.Unit: Y = Z"
+  // Padrao 3: Formato inline "Qtde: X x Vl.Unit: Y = Z"
   const patInline = /Qtde?\.?:\s*([\d.,]+)\s*(?:x|X)\s*(?:Vl\.?\s*Unit\.?:?\s*)?([\d.,]+)\s*=?\s*([\d.,]+)?/i;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
 
-    // Padrão 1: Linha completa com código + descrição + qtd + un + preço
+    // Padrao 1: linha completa com código + descricao + qtd + un + preco
     const m1 = line.match(patItemLine);
     if (m1) {
       const nome = m1[2].trim();
@@ -385,12 +424,12 @@ const parseNativePdfReceiptText = (text, items) => {
         item_cadastrado: matchedItem?.name || null,
         matchedItemId: matchedItem?.id || '',
         confidence: 0.97,
-        rawLine: 'PDF - codigo ' + m1[1]
+        rawLine: 'PDF - código ' + m1[1]
       });
       continue;
     }
 
-    // Padrão 2: SEFAZ-TO / Assaí — "Código: XXXQtde.: Y VL. Unit.:Z"
+    // Padrao 2: SEFAZ-TO / Assai - "Codigo: XXXQtde.: Y VL. Unit.:Z"
     const m2 = line.match(patSefazTo);
     if (m2) {
       const code = m2[1];
@@ -412,11 +451,11 @@ const parseNativePdfReceiptText = (text, items) => {
       continue;
     }
 
-    // Padrão 3: Inline — nome na linha anterior, "Qtde: X x Vl.Unit: Y = Z" na linha atual
+    // Padrao 3: inline - nome na linha anterior e dados na linha atual
     const m3 = line.match(patInline);
     if (m3 && index > 0) {
       const prevLine = lines[index - 1] || '';
-      // Linha anterior não pode ser outro padrão numérico
+      // Linha anterior nao pode ser outro padrao numerico
       if (prevLine && !/^\d+[.,]\d/.test(prevLine) && !/Qtde/i.test(prevLine)) {
         const nome = prevLine.replace(/^\d{4,}\s*-?\s*/, '').trim();
         if (nome.length >= 3) {
@@ -437,22 +476,22 @@ const parseNativePdfReceiptText = (text, items) => {
   const unique = draftItems.filter((entry, idx, arr) => idx === arr.findIndex((item) => slug(item.nome) === slug(entry.nome) && item.preco_unitario === entry.preco_unitario && item.quantidade === entry.quantidade));
   console.log('[PDF Parser] Itens encontrados:', unique.length);
 
-  // Identificar emitente: linha logo após cabeçalho institucional, antes do CNPJ
+  // Identifica emitente: linha apos cabecalho institucional e antes do CNPJ
   const skipPatterns = /^(GOVERNO|SECRETARIA|DANFE|NFC-?e|Documento|Nota Fiscal|Detalhe|Informac|PROTOCOLO|Consulte|Consumidor|CNPJ|Inscr)/i;
   const cnpjIdx = lines.findIndex((l) => /^CNPJ/i.test(l));
   const market = (cnpjIdx > 0 ? lines[cnpjIdx - 1] : null) || lines.find((line) => line.length > 5 && !skipPatterns.test(line) && /[A-Z]{3,}/i.test(line) && !/^\d+$/.test(line)) || 'Emitente nao identificado';
 
-  // Data: formatos comuns "DD/MM/YYYY HH:MM:SS", "DataDD/MM/YYYY", "Emissão: DD/MM/YYYY"
+  // Data: formatos comuns "DD/MM/YYYY HH:MM:SS", "DataDD/MM/YYYY", "Emissao: DD/MM/YYYY"
   const dateMatch = String(text || '').match(/Data\s*:?\s*(\d{2})\/(\d{2})\/(\d{4})\s+\d{2}:\d{2}/)
     || String(text || '').match(/Emiss.o:\s*(\d{2})\/(\d{2})\/(\d{4})/i)
     || String(text || '').match(/(\d{2})\/(\d{2})\/(\d{4})\s+\d{2}:\d{2}/);
 
-  // Total: múltiplos padrões brasileiros (com ou sem espaço, com prefixo numérico)
+  // Total: multiplos padroes brasileiros, com ou sem espaco
   const totalMatch = String(text || '').match(/Valor\s*(?:a\s*)?Pag(?:ar|o)\s*:?\s*(?:\d+\s*)?R?\$?\s*([\d.,]+)/i)
     || String(text || '').match(/VALOR\s*PAGO\s*:?\s*R?\$?\s*([\d.,]+)/i)
     || String(text || '').match(/Total\s*:?\s*R?\$?\s*([\d.,]+)/i);
 
-  // Busca direta: "Chave de acesso:17260106..." (padrão exato do PDF SEFAZ-TO)
+  // Busca direta: "Chave de acesso:17260106..."
   const directKeyMatch = text.match(/[Cc]have\s+de\s+[Aa]cesso\s*:?\s*(\d{44})/);
   const directKey = directKeyMatch?.[1] || '';
   const validAccessKeys = extractAccessKeyCandidates(text).filter((candidate) => validateAccessKey(candidate));
@@ -480,10 +519,10 @@ const parseNativePdfReceiptText = (text, items) => {
   };
 };
 const extractAccessKey = (raw) => String(raw || '').replace(/\D/g, '').match(/\d{44}/)?.[0] || '';
-// Corrige erros OCR leves em trechos que já são predominantemente dígitos
+// Corrige erros leves de OCR em trechos predominantemente numericos
 const fixOcrInDigitRun = (text) => String(text || '').replace(/[\]|!]/g, '1');
 
-// Verifica se uma linha é predominantemente dígitos (>70% dos não-espaço são dígitos)
+// Verifica se uma linha e predominantemente numerica (>70% dos caracteres sao digitos)
 const isDigitLine = (line) => {
   const chars = line.replace(/\s/g, '');
   if (chars.length < 30) return false;
@@ -495,20 +534,20 @@ const extractAccessKeyCandidates = (raw) => {
   const text = String(raw || '');
   const candidates = [];
 
-  // 1. Busca direta por 44 dígitos consecutivos (ex: chave sem espaços)
+  // 1. Busca direta por 44 digitos consecutivos
   const directMatches = text.match(/\d{44}/g) || [];
   directMatches.forEach((m) => candidates.push(m));
 
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
-  // 2. Linhas predominantemente numéricas (padrão visual: "1726 0111 1642 4800 ...")
-  // APENAS extrai de linhas que já são >70% dígitos — evita falsos positivos
+  // 2. Linhas predominantemente numericas
+  // Extrai apenas de linhas que ja sao >70% digitos para evitar falsos positivos
   for (const line of lines) {
     if (isDigitLine(line)) {
       const fixed = fixOcrInDigitRun(line);
       const digits = fixed.replace(/\D/g, '');
       if (digits.length >= 44) {
-        // Sliding window APENAS dentro desta linha de dígitos
+        // Sliding window apenas dentro desta linha de digitos
         for (let j = 0; j <= digits.length - 44; j += 1) {
           candidates.push(digits.slice(j, j + 44));
         }
@@ -516,10 +555,10 @@ const extractAccessKeyCandidates = (raw) => {
     }
   }
 
-  // 3. Busca contextual: linha de dígitos logo após "chave" / "acesso"
+  // 3. Busca contextual: linha de digitos logo apos "chave" ou "acesso"
   for (let i = 0; i < lines.length; i += 1) {
     if (/chave|acesso/i.test(lines[i])) {
-      // Procura a próxima linha que é predominantemente numérica
+      // Procura a próxima linha predominantemente numerica
       for (let k = i + 1; k < Math.min(i + 5, lines.length); k += 1) {
         if (isDigitLine(lines[k])) {
           const fixed = fixOcrInDigitRun(lines[k]);
@@ -534,7 +573,7 @@ const extractAccessKeyCandidates = (raw) => {
     }
   }
 
-  // NÃO faz sliding window no texto inteiro — causa falsos positivos
+  // Nao faz sliding window no texto inteiro para evitar falsos positivos
   return [...new Set(candidates)];
 };
 const validateAccessKey = (key) => {
@@ -601,13 +640,13 @@ const detectQrDataFromDataUrl = async (dataUrl) => {
       image,
       // Metade inferior completa (QR sempre fica na parte de baixo do cupom)
       createImageCanvas(image, { x: 0, y: image.height * 0.5, width: image.width, height: image.height * 0.5 }, 2),
-      // Canto inferior-esquerdo (posição mais comum do QR em NFC-e)
+      // Canto inferior esquerdo; posicao mais comum do QR em NFC-e
       createImageCanvas(image, { x: 0, y: image.height * 0.55, width: image.width * 0.5, height: image.height * 0.35 }, 3),
       // Canto inferior-esquerdo com alto contraste
       createImageCanvas(image, { x: 0, y: image.height * 0.55, width: image.width * 0.5, height: image.height * 0.35 }, 3, 'grayscale(1) contrast(2) brightness(1.1)'),
       // Metade inferior com contraste
       createImageCanvas(image, { x: 0, y: image.height * 0.5, width: image.width, height: image.height * 0.5 }, 2, 'grayscale(1) contrast(1.6) brightness(1.05)'),
-      // Terço inferior (QR mais perto do rodapé)
+      // Terco inferior; QR mais perto do rodape
       createImageCanvas(image, { x: 0, y: image.height * 0.6, width: image.width * 0.6, height: image.height * 0.35 }, 3.5),
       // Escala maior para QR pequeno
       createImageCanvas(image, { x: 0, y: image.height * 0.5, width: image.width * 0.5, height: image.height * 0.4 }, 4, 'grayscale(1) contrast(1.8)')
@@ -671,7 +710,7 @@ const buildSoftCrop = async (dataUrl, crop, scaleFactor = 3) => {
   const context = canvas.getContext('2d');
   canvas.width = sw * scaleFactor;
   canvas.height = sh * scaleFactor;
-  // Grayscale + alto contraste, SEM threshold duro (preserva dígitos pequenos)
+  // Grayscale + alto contraste sem threshold duro; preserva digitos pequenos
   context.filter = 'grayscale(1) contrast(2.0) brightness(1.1)';
   context.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL('image/png');
@@ -740,7 +779,7 @@ const chooseBestAccessKey = ({ ocrText, qrRawValue }) => {
   console.log('[chooseBestAccessKey] OCR candidatas:', ocrRawCandidates.length, 'validas:', ocrCandidates.length);
 
   if (ocrCandidates.length) {
-    // Prioriza chave encontrada perto do rótulo "Chave de Acesso"
+    // Prioriza chave encontrada perto do rotulo "Chave de Acesso"
     const lines = String(ocrText || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     for (let i = 0; i < lines.length; i += 1) {
       if (/chave\s+de\s+acesso/i.test(lines[i])) {
@@ -756,8 +795,8 @@ const chooseBestAccessKey = ({ ocrText, qrRawValue }) => {
     return { key: ocrCandidates[0], source: 'OCR', valid: true, candidates: ocrRawCandidates };
   }
 
-  // 4. Fallback: apenas candidatas que parecem NFC-e (posição 20-21 = "65")
-  // Nunca retorna sequências aleatórias de dígitos como chave
+  // 4. Fallback: apenas candidatas que parecem NFC-e (posicao 20-21 = "65")
+  // Nunca retorna sequencias aleatorias de digitos como chave
   const looksLikeNfce = (k) => String(k).length === 44 && String(k).slice(20, 22) === '65';
   const allCandidates = [...new Set([...qrRawCandidates, ...ocrRawCandidates])];
   const nfceCandidates = allCandidates.filter(looksLikeNfce);
@@ -785,19 +824,23 @@ const renderPdfFirstPage = async (file) => {
   return { dataUrl, blob: await (await fetch(dataUrl)).blob() };
 };
 const screens = [
-  ['dashboard', 'Dashboard', 'Visao geral'],
-  ['cycle', 'Ciclo de compras', 'Visao geral'],
-  ['timeline', 'Linha do tempo', 'Visao geral'],
+  ['dashboard', 'Dashboard', 'Visão geral'],
+  ['cycle', 'Ciclo de compras', 'Visão geral'],
+  ['timeline', 'Linha do tempo', 'Visão geral'],
   ['items', 'Itens', 'Estoque'],
   ['entry', 'Entrada', 'Estoque'],
   ['output', 'Saida', 'Estoque'],
-  ['extra', 'Reposicao avulsa', 'Estoque'],
-  ['history', 'Historico', 'Estoque'],
+  ['extra', 'Reposição avulsa', 'Estoque'],
+  ['history', 'Histórico', 'Estoque'],
   ['prices', 'Precos', 'Analise'],
   ['duration', 'Duracao', 'Analise'],
+  ['reports', 'Relatorios', 'Analise'],
+  ['consumption', 'Consumo estimado', 'Analise'],
+  ['maintenance', 'Manutenção Predial', 'Predial'],
+  ['inventory', 'Inventário TI', 'Predial'],
   ['receipts', 'Comprovantes', 'Administracao'],
   ['suppliers', 'Fornecedores', 'Administracao'],
-  ['settings', 'Configuracoes', 'Administracao']
+  ['settings', 'Configurações', 'Administracao']
 ];
 
 function App() {
@@ -805,13 +848,14 @@ function App() {
   const [dbReady, setDbReady] = useState(false);
   const [screen, setScreen] = useState('dashboard');
   const [flash, setFlash] = useState(null);
+  const [alertsLastSeen, setAlertsLastSeen] = useState(0);
   const [historyFilter, setHistoryFilter] = useState('');
   const [priceFilter, setPriceFilter] = useState('');
   const [reader, setReader] = useState({ loading: false, error: '', fileName: '', fileDataUrl: '', fileMimeType: '', preview: '', parsed: null, draftItems: [], supplierId: '', accessKey: '', queryUrl: '' });
   const timer = useRef(null);
   const readerFileRef = useRef(null); // guarda File original para upload ao backend
 
-  // ─── Carga inicial: SQLite → state (com migração automática do localStorage) ───
+  // Carga inicial: SQLite para state, com migracao autom?tica do localStorage
   useEffect(() => {
     import('./api.js').then(({ default: api }) => {
       window.__api = api; // disponibiliza globalmente para CRUD
@@ -835,7 +879,7 @@ function App() {
           } else { setDbReady(true); }
         }
       }).catch(() => {
-        // Fallback: backend indisponível, tenta localStorage
+        // Fallback: backend indisponivel, tenta localStorage
         try {
           const stored = localStorage.getItem(STORAGE_KEY);
           if (stored) setState(hydrateState(JSON.parse(stored)));
@@ -865,6 +909,12 @@ function App() {
   };
   const lowStockItems = useMemo(() => state.items.filter((item) => Number(item.quantity || 0) <= Number(item.minStock || 0)), [state.items]);
   const vulnerableItems = useMemo(() => state.items.filter((item) => durationForItem(item) < daysUntilNextPurchase), [state.items, daysUntilNextPurchase]);
+  const maintOverdue = (state.maintenanceAssets || []).filter((a) => {
+    if (!a.lastMaintenanceDate) return true;
+    const last = new Date(a.lastMaintenanceDate);
+    const next = new Date(last.getTime() + Number(a.intervalDays||180) * 86400000);
+    return next <= new Date();
+  }).length;
 
   const showFlash = (message, tone = 'success') => { setFlash({ message, tone }); clearTimeout(timer.current); timer.current = setTimeout(() => setFlash(null), 3200); };
 
@@ -878,8 +928,6 @@ function App() {
   const addItem = (payload) => apiCall(window.__api.addItem(payload), 'Item cadastrado.');
   const updateItem = (itemId, payload) => apiCall(window.__api.updateItem(itemId, payload), 'Item atualizado.');
   const deleteItem = (itemId) => {
-    const usageCount = state.movements.filter((m) => m.itemId === itemId).length + state.priceHistory.filter((p) => p.itemId === itemId).length;
-    if (usageCount > 0 && !window.confirm(`Este item tem ${usageCount} registro(s) de movimentacao/preco. Deseja excluir mesmo assim?`)) return;
     apiCall(window.__api.deleteItem(itemId), 'Item excluido.');
   };
 
@@ -892,7 +940,7 @@ function App() {
   const registerExtra = (payload) => {
     const supplierName = state.suppliers.find((s) => s.id === Number(payload.supplierId))?.name || payload.location || '';
     // Backend: inserts extra + movement + updates item qty
-    apiCall(window.__api.registerExtra({ ...payload, location: supplierName }), 'Reposicao avulsa registrada.');
+    apiCall(window.__api.registerExtra({ ...payload, location: supplierName }), 'Reposição avulsa registrada.');
   };
 
   const addPrice = (payload) => {
@@ -901,6 +949,14 @@ function App() {
   };
   const addReceipt = (payload, file) => apiCall(window.__api.addReceipt(payload, file), 'Comprovante salvo.');
   const deleteReceipt = (id) => apiCall(window.__api.deleteReceipt(id), 'Comprovante excluido.');
+  const addMaintenanceAsset = async (p) => { const r = await window.__api.addMaintenanceAsset(p); setState((s) => ({ ...s, maintenanceAssets: [...s.maintenanceAssets, r].sort((a,b) => a.name.localeCompare(b.name)) })); };
+  const updateMaintenanceAsset = async (id, p) => { const r = await window.__api.updateMaintenanceAsset(id, p); setState((s) => ({ ...s, maintenanceAssets: s.maintenanceAssets.map((a) => a.id === id ? r : a) })); };
+  const deleteMaintenanceAsset = async (id) => { await window.__api.deleteMaintenanceAsset(id); setState((s) => ({ ...s, maintenanceAssets: s.maintenanceAssets.filter((a) => a.id !== id) })); };
+  const addMaintenanceRecord = async (p) => { const r = await window.__api.addMaintenanceRecord(p); setState((s) => ({ ...s, maintenanceRecords: [r, ...s.maintenanceRecords], maintenanceAssets: s.maintenanceAssets.map((a) => a.id === Number(p.assetId) ? { ...a, lastMaintenanceDate: p.date } : a) })); };
+  const deleteMaintenanceRecord = async (id) => { await window.__api.deleteMaintenanceRecord(id); setState((s) => ({ ...s, maintenanceRecords: s.maintenanceRecords.filter((r) => r.id !== id) })); };
+  const addInventoryAsset = async (p) => { const r = await window.__api.addInventoryAsset(p); setState((s) => ({ ...s, inventoryAssets: [...s.inventoryAssets, r].sort((a,b) => (a.description || '').localeCompare(b.description || '')) })); };
+  const updateInventoryAsset = async (id, p) => { const r = await window.__api.updateInventoryAsset(id, p); setState((s) => ({ ...s, inventoryAssets: s.inventoryAssets.map((a) => a.id === id ? r : a) })); };
+  const deleteInventoryAsset = async (id) => { await window.__api.deleteInventoryAsset(id); setState((s) => ({ ...s, inventoryAssets: s.inventoryAssets.filter((a) => a.id !== id) })); };
   const addSupplier = (payload) => apiCall(window.__api.addSupplier(payload), 'Fornecedor cadastrado.');
   const updateSupplier = (supplierId, payload) => apiCall(window.__api.updateSupplier(supplierId, payload), 'Fornecedor atualizado.');
   const deleteSupplier = (supplierId) => {
@@ -910,13 +966,13 @@ function App() {
     }).catch(showFlashErr);
   };
   const updateCycle = (payload) => apiCall(window.__api.updateCycle(payload), 'Ciclo atualizado.');
-  const saveSettings = (payload) => apiCall(window.__api.saveSettings(payload), 'Configuracoes salvas.');
+  const saveSettings = (payload) => apiCall(window.__api.saveSettings(payload), 'Configurações salvas.');
   const updateConsumption = (itemId, weeklyConsumption) => {
     window.__api.updateConsumption(itemId, weeklyConsumption).catch(() => {});
     setState((current) => ({ ...current, items: current.items.map((item) => item.id === itemId ? { ...item, weeklyConsumption } : item) }));
   };
 
-  // Resolve fornecedor pendente quando suppliers atualiza após cadastro
+      // Resolve fornecedor pendente quando suppliers atualiza apos cadastro
   useEffect(() => {
     if (reader._pendingSupplierName) {
       const match = findExistingSupplier(reader._pendingSupplierName, state.suppliers);
@@ -925,7 +981,7 @@ function App() {
   }, [state.suppliers, reader._pendingSupplierName]);
 
   const analyzeReceipt = async (file) => {
-    readerFileRef.current = file; // Guarda referência para upload posterior
+    readerFileRef.current = file; // Guarda referÃªncia para upload posterior
     let previewDataUrl = '';
     let sourceForOcr = file;
     let fileDataUrl = '';
@@ -962,7 +1018,7 @@ function App() {
         console.log('[PDF] Texto extraido:', pdfText.length, 'chars, primeiras 500:', pdfText.slice(0, 500));
         const parsedPdf = parseNativePdfReceiptText(pdfText, state.items);
         console.log('[PDF] Resultado parse:', parsedPdf.items?.length, 'itens, chave:', parsedPdf.accessKey ? 'SIM' : 'NAO', 'total:', parsedPdf.total);
-        // Guardar chave extraída do PDF textual mesmo que itens falhem
+          // Guardar chave extraida do PDF textual mesmo que itens falhem
         pdfAccessKey = parsedPdf.accessKey || '';
         const pdfQueryUrl = parsedPdf.queryUrl || '';
         if (parsedPdf.items?.length) {
@@ -996,7 +1052,7 @@ function App() {
         const result = await worker.recognize(variant.dataUrl);
         const variantText = result.data.text || '';
         ocrTexts.push(variantText);
-        // Log das variantes que contêm dígitos relevantes
+          // Log das variantes que contem digitos relevantes
         const variantDigits = variantText.replace(/\D/g, '');
         if (variantDigits.length >= 44) {
           console.log(`[OCR] ${variant.label}: ${variantText.length} chars, ${variantDigits.length} digitos`);
@@ -1093,42 +1149,76 @@ function App() {
   };
 
   const cycleProgress = Math.max(0, Math.min(100, (diffDays(new Date(), new Date(`${state.cycle.lastPurchaseDate}T00:00:00`)) / Number(state.cycle.intervalDays || 1)) * 100));
-  const groups = ['Visao geral', 'Estoque', 'Analise', 'Administracao'];
+  const groups = ['Visão geral', 'Estoque', 'Analise', 'Predial', 'Administracao'];
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-kicker">Reserva Fiscal</span><h1>Controle de Limpeza</h1><p className="brand-subtitle">Inteligencia tributaria aplicada a operacao interna</p></div>
-        {groups.map((group) => <div className="nav-group" key={group}><span className="nav-label">{group}</span>{screens.filter((screenItem) => screenItem[2] === group).map(([id, label]) => <button key={id} className={`nav-item ${screen === id ? 'active' : ''}`} onClick={() => setScreen(id)}><span>{label}</span>{id === 'dashboard' && lowStockItems.length > 0 ? <span className="nav-pill">{lowStockItems.length}</span> : null}</button>)}</div>)}
+        {groups.map((group) => <div className="nav-group" key={group}><span className="nav-label">{group}</span>{screens.filter((screenItem) => screenItem[2] === group).map(([id, label]) => <button key={id} className={`nav-item ${screen === id ? 'active' : ''}`} onClick={() => { setScreen(id); if (id === 'dashboard') setAlertsLastSeen(lowStockItems.length); }}><span>{label}</span>{id === 'dashboard' && lowStockItems.length > alertsLastSeen ? <span className="nav-pill">{lowStockItems.length}</span> : null}{id === 'maintenance' && maintOverdue > 0 ? <span className="nav-pill">{maintOverdue}</span> : null}</button>)}</div>)}
       </aside>
       <main className="main">
-        <header className="topbar"><div><p className="eyebrow">Reserva Fiscal � Setor de limpeza</p><h2>{screens.find((screenItem) => screenItem[0] === screen)?.[1]}</h2><p className="subtle">{state.items.length} itens cadastrados, proxima compra em {formatDate(safeIsoDate(nextPurchaseDate))}</p></div>{flash ? <div className={`flash ${flash.tone}`}>{flash.message}</div> : null}</header>
+        <header className="topbar"><div><p className="eyebrow">Reserva Fiscal - Setor de limpeza</p><h2>{screens.find((screenItem) => screenItem[0] === screen)?.[1]}</h2><p className="subtle">{state.items.length} itens cadastrados, próxima compra em {formatDate(safeIsoDate(nextPurchaseDate))}</p></div>{flash ? <div className={`flash ${flash.tone}`}>{flash.message}</div> : null}</header>
 
-        {screen === 'dashboard' ? <><div className="metrics"><MetricCard label="Itens ativos" value={state.items.length} /><MetricCard label="Abaixo do minimo" value={lowStockItems.length} tone={lowStockItems.length ? 'danger' : 'success'} /><MetricCard label="Nao chegam ate a compra" value={vulnerableItems.length} tone={vulnerableItems.length ? 'warn' : 'success'} /><MetricCard label="Custo extra no ciclo" value={currency(state.extraPurchases.reduce((sum, entry) => sum + entry.cost, 0))} tone="warn" /></div><div className="panel-grid"><section className="panel"><div className="panel-head"><div><h3>Alertas automaticos</h3><p>Compra geral prevista para {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><Badge tone={daysUntilNextPurchase <= 7 ? 'danger' : 'info'}>{daysUntilNextPurchase} dias restantes</Badge></div>{!lowStockItems.length && !vulnerableItems.length ? <EmptyState text="Nenhum alerta no momento." /> : <div className="stack">{lowStockItems.map((item) => <AlertCard key={`low-${item.id}`} tone="danger" title={`${item.name} abaixo do estoque minimo`} text={`Atual ${item.quantity} ${item.unit}. Minimo ${item.minStock} ${item.unit}.`} />)}{vulnerableItems.map((item) => <AlertCard key={`vul-${item.id}`} tone="warn" title={`${item.name} nao chega ate a proxima compra`} text={`Duracao estimada: ${durationForItem(item)} dias.`} />)}</div>}</section><section className="panel"><div className="panel-head"><div><h3>Ultimas movimentacoes</h3><p>Entradas, saidas e reposicoes avulsas</p></div></div><div className="stack">{[...state.movements].slice(-6).reverse().map((entry) => <div className="history-row" key={entry.id}><span className={`dot ${entry.type}`}></span><div className="history-main"><strong>{entry.type === 'entrada' ? '+' : '-'}{entry.quantity}</strong> {itemsById[entry.itemId]?.name || 'Item removido'} <span className="sub-note">{entry.notes}</span></div><span className="mono">{formatDate(entry.date)}</span></div>)}</div></section></div></> : null}
+        {screen === 'dashboard' ? <><div className="metrics"><MetricCard label="Itens ativos" value={state.items.length} /><MetricCard label="Abaixo do minimo" value={lowStockItems.length} tone={lowStockItems.length ? 'danger' : 'success'} /><MetricCard label="Nao chegam ate a compra" value={vulnerableItems.length} tone={vulnerableItems.length ? 'warn' : 'success'} /><MetricCard label="Custo extra no ciclo" value={currency(state.extraPurchases.reduce((sum, entry) => sum + entry.cost, 0))} tone="warn" /></div><div className="panel-grid"><section className="panel"><div className="panel-head"><div><h3>Alertas automaticos</h3><p>Compra geral prevista para {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><Badge tone={daysUntilNextPurchase <= 7 ? 'danger' : 'info'}>{daysUntilNextPurchase} dias restantes</Badge></div>{!lowStockItems.length && !vulnerableItems.length ? <EmptyState text="Nenhum alerta no momento." /> : <div className="stack">{lowStockItems.map((item) => <AlertCard key={`low-${item.id}`} tone="danger" title={`${item.name} abaixo do estoque minimo`} text={`Atual ${item.quantity} ${item.unit}. Minimo ${item.minStock} ${item.unit}.`} />)}{vulnerableItems.map((item) => <AlertCard key={`vul-${item.id}`} tone="warn" title={`${item.name} nao chega ate a próxima compra`} text={`Duracao estimada: ${durationForItem(item)} dias.`} />)}</div>}</section><section className="panel"><div className="panel-head"><div><h3>Últimas movimentações</h3><p>Entradas, saidas e reposições avulsas</p></div></div><div className="stack">{[...state.movements].slice(-6).reverse().map((entry) => <div className="history-row" key={entry.id}><span className={`dot ${entry.type}`}></span><div className="history-main"><strong>{entry.type === 'entrada' ? '+' : '-'}{entry.quantity}</strong> {itemsById[entry.itemId]?.name || 'Item removido'} <span className="sub-note">{entry.notes}</span></div><span className="mono">{formatDate(entry.date)}</span></div>)}</div></section></div></> : null}
 
-        {screen === 'cycle' ? <><section className={`panel cycle-banner ${daysUntilNextPurchase <= 7 ? 'danger' : daysUntilNextPurchase <= 20 ? 'warn' : 'success'}`}><div><p className="eyebrow">Proxima compra geral</p><h3>{daysUntilNextPurchase} dias</h3><p>Data prevista: {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><div className="cycle-meter"><div className="progress"><span style={{ width: `${cycleProgress}%` }}></span></div><p>Custo extra no ciclo atual: {currency(state.extraPurchases.filter((entry) => new Date(`${entry.date}T00:00:00`) >= new Date(`${state.cycle.lastPurchaseDate}T00:00:00`)).reduce((sum, entry) => sum + entry.cost, 0))}</p></div></section><section className="panel"><div className="panel-head"><div><h3>Itens vs proxima compra</h3><p>Quais itens aguentam ate o fechamento do ciclo</p></div></div><div className="table-wrap"><table><thead><tr><th>Item</th><th>Estoque</th><th>Esgota em</th><th>Dias restantes</th><th>Situacao</th></tr></thead><tbody>{state.items.map((item) => { const days = durationForItem(item); return <tr key={item.id}><td>{item.name}</td><td>{item.quantity} {item.unit}</td><td>{Number.isFinite(days) ? `${days} dias` : 'Sem consumo'}</td><td>{daysUntilNextPurchase}</td><td><Badge tone={days >= daysUntilNextPurchase ? 'success' : 'warn'}>{days >= daysUntilNextPurchase ? 'Aguenta o ciclo' : 'Precisa repor'}</Badge></td></tr>; })}</tbody></table></div></section></> : null}
+        {screen === 'cycle' ? <><section className={`panel cycle-banner ${daysUntilNextPurchase <= 7 ? 'danger' : daysUntilNextPurchase <= 20 ? 'warn' : 'success'}`}><div><p className="eyebrow">Próxima compra geral</p><h3>{daysUntilNextPurchase} dias</h3><p>Data prevista: {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><div className="cycle-meter"><div className="progress"><span style={{ width: `${cycleProgress}%` }}></span></div><p>Custo extra no ciclo atual: {currency(state.extraPurchases.filter((entry) => new Date(`${entry.date}T00:00:00`) >= new Date(`${state.cycle.lastPurchaseDate}T00:00:00`)).reduce((sum, entry) => sum + entry.cost, 0))}</p></div></section><section className="panel"><div className="panel-head"><div><h3>Itens vs próxima compra</h3><p>Quais itens aguentam ate o fechamento do ciclo</p></div></div><div className="table-wrap"><table><thead><tr><th>Item</th><th>Estoque</th><th>Esgota em</th><th>Dias restantes</th><th>Situacao</th></tr></thead><tbody>{state.items.map((item) => { const days = durationForItem(item); return <tr key={item.id}><td>{item.name}</td><td>{item.quantity} {item.unit}</td><td>{Number.isFinite(days) ? `${days} dias` : 'Sem consumo'}</td><td>{daysUntilNextPurchase}</td><td><Badge tone={days >= daysUntilNextPurchase ? 'success' : 'warn'}>{days >= daysUntilNextPurchase ? 'Aguenta o ciclo' : 'Precisa repor'}</Badge></td></tr>; })}</tbody></table></div></section></> : null}
 
-        {screen === 'timeline' ? <section className="panel"><div className="panel-head"><div><h3>Linha do tempo cronologica</h3><p>Esgotamentos projetados, reposicoes avulsas e compra geral</p></div></div><div className="timeline">{state.items.map((item) => ({ id: `item-${item.id}`, date: addDays(todayString(), Number.isFinite(durationForItem(item)) ? durationForItem(item) : 3650).toISOString().split('T')[0], tone: durationForItem(item) <= 7 ? 'danger' : durationForItem(item) <= daysUntilNextPurchase ? 'warn' : 'success', title: `${item.name} deve acabar`, subtitle: `${item.quantity} ${item.unit} em estoque, consumo ${item.weeklyConsumption} ${item.unit}/semana` })).concat(state.extraPurchases.map((entry) => ({ id: `extra-${entry.id}`, date: entry.date, tone: 'info', title: `Reposicao avulsa de ${itemsById[entry.itemId]?.name || 'Item removido'}`, subtitle: `${entry.quantity} ${itemsById[entry.itemId]?.unit || ''} em ${suppliersById[entry.supplierId]?.name || entry.location || 'local nao informado'} por ${currency(entry.cost)}` }))).concat([{ id: 'cycle', date: safeIsoDate(nextPurchaseDate), tone: 'neutral', title: 'Proxima compra geral', subtitle: `Ciclo fixo de ${state.cycle.intervalDays} dias` }]).sort((a, b) => new Date(`${a.date}T00:00:00`) - new Date(`${b.date}T00:00:00`)).map((event) => <div className="timeline-item" key={event.id}><span className={`timeline-dot ${event.tone}`}></span><div><span className="mono">{formatDate(event.date)}</span><h4>{event.title}</h4><p>{event.subtitle}</p></div></div>)}</div></section> : null}
+        {screen === 'timeline' ? <section className="panel"><div className="panel-head"><div><h3>Linha do tempo cronológica</h3><p>Esgotamentos projetados, reposições avulsas e compra geral</p></div></div><div className="timeline">{state.items.map((item) => ({ id: `item-${item.id}`, date: addDays(todayString(), Number.isFinite(durationForItem(item)) ? durationForItem(item) : 3650).toISOString().split('T')[0], tone: durationForItem(item) <= 7 ? 'danger' : durationForItem(item) <= daysUntilNextPurchase ? 'warn' : 'success', title: `${item.name} deve acabar`, subtitle: `${item.quantity} ${item.unit} em estoque, consumo ${item.weeklyConsumption} ${item.unit}/semana` })).concat(state.extraPurchases.map((entry) => ({ id: `extra-${entry.id}`, date: entry.date, tone: 'info', title: `Reposição avulsa de ${itemsById[entry.itemId]?.name || 'Item removido'}`, subtitle: `${entry.quantity} ${itemsById[entry.itemId]?.unit || ''} em ${suppliersById[entry.supplierId]?.name || entry.location || 'local nao informado'} por ${currency(entry.cost)}` }))).concat([{ id: 'cycle', date: safeIsoDate(nextPurchaseDate), tone: 'neutral', title: 'Próxima compra geral', subtitle: `Ciclo fixo de ${state.cycle.intervalDays} dias` }]).sort((a, b) => new Date(`${a.date}T00:00:00`) - new Date(`${b.date}T00:00:00`)).map((event) => <div className="timeline-item" key={event.id}><span className={`timeline-dot ${event.tone}`}></span><div><span className="mono">{formatDate(event.date)}</span><h4>{event.title}</h4><p>{event.subtitle}</p></div></div>)}</div></section> : null}
 
         {screen === 'items' ? <ItemsPanel items={state.items} movements={state.movements} priceHistory={state.priceHistory} onAdd={addItem} onUpdate={updateItem} onDelete={deleteItem} /> : null}
         {screen === 'entry' ? <><MovementForm title="Registrar entrada manual" items={state.items} onSubmit={(payload) => registerMovement({ ...payload, type: 'entrada' })} /><ReaderPanel state={reader} items={state.items} suppliers={state.suppliers} onAnalyze={analyzeReceipt} onConfirm={confirmReaderImport} onDraftChange={(draftItems) => setReader((current) => ({ ...current, draftItems }))} onSupplierChange={(supplierId) => setReader((current) => ({ ...current, supplierId }))} onAccessKeyChange={(accessKey) => setReader((current) => ({ ...current, accessKey }))} onAddSupplier={(payload) => { addSupplier(payload); setReader((current) => ({ ...current, _pendingSupplierName: payload.name })); }} onReset={() => setReader({ loading: false, error: '', fileName: '', fileDataUrl: '', fileMimeType: '', preview: '', parsed: null, draftItems: [], supplierId: '', accessKey: '' })} /></> : null}
         {screen === 'output' ? <MovementForm title="Registrar saida" items={state.items} onSubmit={(payload) => registerMovement({ ...payload, type: 'saida' })} /> : null}
         {screen === 'extra' ? <ExtraForm items={state.items} entries={state.extraPurchases} onSubmit={registerExtra} itemsById={itemsById} suppliers={state.suppliers} suppliersById={suppliersById} /> : null}
-        {screen === 'history' ? <section className="panel"><div className="panel-head"><div><h3>Historico completo</h3><p>Movimentacoes filtraveis por item</p></div><select value={historyFilter} onChange={(event) => setHistoryFilter(event.target.value)}><option value="">Todos os itens</option>{state.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="stack">{[...state.movements].reverse().filter((entry) => !historyFilter || String(entry.itemId) === historyFilter).map((entry) => <div className="history-row" key={entry.id}><span className={`dot ${entry.type}`}></span><div className="history-main"><strong>{entry.type === 'entrada' ? '+' : '-'}{entry.quantity} {itemsById[entry.itemId]?.unit || ''}</strong> {itemsById[entry.itemId]?.name || 'Item removido'} <span className="sub-note">{entry.notes}</span></div><span className="mono">{formatDate(entry.date)}</span></div>)}</div></section> : null}
+        {screen === 'history' ? <section className="panel"><div className="panel-head"><div><h3>Histórico completo</h3><p>Movimentacoes filtraveis por item</p></div><select value={historyFilter} onChange={(event) => setHistoryFilter(event.target.value)}><option value="">Todos os itens</option>{state.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="stack">{[...state.movements].reverse().filter((entry) => !historyFilter || String(entry.itemId) === historyFilter).map((entry) => <div className="history-row" key={entry.id}><span className={`dot ${entry.type}`}></span><div className="history-main"><strong>{entry.type === 'entrada' ? '+' : '-'}{entry.quantity} {itemsById[entry.itemId]?.unit || ''}</strong> {itemsById[entry.itemId]?.name || 'Item removido'} <span className="sub-note">{entry.notes}</span></div><span className="mono">{formatDate(entry.date)}</span></div>)}</div></section> : null}
 
         {screen === 'prices' ? <PricesPanel items={!priceFilter ? state.items : state.items.filter((item) => String(item.id) === priceFilter)} allItems={state.items} suppliers={state.suppliers} suppliersById={suppliersById} priceMap={priceMap} filter={priceFilter} onFilterChange={setPriceFilter} onSubmit={addPrice} /> : null}
-        {screen === 'duration' ? <section><section className="panel"><div className="panel-head"><div><h3>Estimativa de duracao</h3><p>Baseada no consumo semanal configurado</p></div></div>{vulnerableItems.length ? <div className="stack">{vulnerableItems.map((item) => <AlertCard key={item.id} tone="warn" title={`${item.name} nao chega ate a proxima compra`} text={`Duracao estimada de ${durationForItem(item)} dias.`} />)}</div> : <EmptyState text="Todos os itens configurados aguentam ate a proxima compra." />}</section><section className="panel"><div className="stack">{state.items.map((item) => { const days = durationForItem(item); const tone = days <= 7 ? 'danger' : days <= 21 ? 'warn' : 'success'; const width = Number.isFinite(days) ? Math.min(100, (days / 60) * 100) : 100; return <div className="duration-card" key={item.id}><div className="panel-head"><div><h3>{item.name}</h3><p>{item.quantity} {item.unit} em estoque, {item.weeklyConsumption || 0} {item.unit}/semana</p></div><Badge tone={tone}>{Number.isFinite(days) ? `${days} dias` : 'Sem consumo configurado'}</Badge></div><div className="progress duration"><span className={tone} style={{ width: `${width}%` }}></span></div></div>; })}</div></section></section> : null}
+        {screen === 'duration' ? <section><section className="panel"><div className="panel-head"><div><h3>Estimativa de duração</h3><p>Baseada no consumo semanal configurado</p></div></div>{vulnerableItems.length ? <div className="stack">{vulnerableItems.map((item) => <AlertCard key={item.id} tone="warn" title={`${item.name} nao chega ate a próxima compra`} text={`Duracao estimada de ${durationForItem(item)} dias.`} />)}</div> : <EmptyState text="Todos os itens configurados aguentam ate a próxima compra." />}</section><section className="panel"><div className="stack">{state.items.map((item) => { const days = durationForItem(item); const tone = days <= 7 ? 'danger' : days <= 21 ? 'warn' : 'success'; const width = Number.isFinite(days) ? Math.min(100, (days / 60) * 100) : 100; return <div className="duration-card" key={item.id}><div className="panel-head"><div><h3>{item.name}</h3><p>{item.quantity} {item.unit} em estoque, {item.weeklyConsumption || 0} {item.unit}/semana</p></div><Badge tone={tone}>{Number.isFinite(days) ? `${days} dias` : 'Sem consumo configurado'}</Badge></div><div className="progress duration"><span className={tone} style={{ width: `${width}%` }}></span></div></div>; })}</div></section></section> : null}
+        {screen === 'reports' ? <ReportsPanel items={state.items} lowStockItems={lowStockItems} vulnerableItems={vulnerableItems} durationForItem={durationForItem} daysUntilNextPurchase={daysUntilNextPurchase} nextPurchaseDate={nextPurchaseDate} cycle={state.cycle} priceMap={priceMap} suppliersById={suppliersById} /> : null}
+        {screen === 'consumption' ? <ConsumptionPanel items={state.items} /> : null}
+        {screen === 'maintenance' ? <MaintenancePanel assets={state.maintenanceAssets} records={state.maintenanceRecords} suppliers={state.suppliers} onAddAsset={addMaintenanceAsset} onUpdateAsset={updateMaintenanceAsset} onDeleteAsset={deleteMaintenanceAsset} onAddRecord={addMaintenanceRecord} onDeleteRecord={deleteMaintenanceRecord} /> : null}
+        {screen === 'inventory' ? <InventoryPanel assets={state.inventoryAssets} suppliers={state.suppliers} onAddAsset={addInventoryAsset} onUpdateAsset={updateInventoryAsset} onDeleteAsset={deleteInventoryAsset} /> : null}
         {screen === 'receipts' ? <ReceiptsPanel receipts={state.receipts} onAdd={addReceipt} onDelete={deleteReceipt} suppliersById={suppliersById} /> : null}
         {screen === 'suppliers' ? <SuppliersPanel suppliers={state.suppliers} priceHistory={state.priceHistory} extraPurchases={state.extraPurchases} onSubmit={addSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} /> : null}
         {screen === 'settings' ? <SettingsPanel state={state} nextPurchaseDate={nextPurchaseDate} onSaveCycle={updateCycle} onSaveSettings={saveSettings} onUpdateConsumption={updateConsumption} /> : null}
-        <section className="panel"><NewItemForm onSubmit={addItem} /></section>
       </main>
     </div>
   );
 }
 
-function MovementForm({ title, items, onSubmit }) { const [form, setForm] = useState({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), notes: '' }); return <section className="panel"><div className="panel-head"><div><h3>{title}</h3><p>Registro de movimentacao de estoque</p></div></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSubmit({ itemId: Number(form.itemId), quantity: Number(form.quantity), date: form.date, notes: form.notes }); setForm({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), notes: '' }); }}><Field label="Item"><SearchableSelect items={items} value={form.itemId} onChange={(val) => setForm({ ...form, itemId: val })} placeholder="Digite para buscar item..." /></Field><Field label="Quantidade"><input type="number" min="0.01" step="0.01" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} /></Field><Field label="Data"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><Field label="Observacao"><input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar</button></div></form></section>; }
-function ExtraForm({ items, entries, onSubmit, itemsById, suppliers, suppliersById }) { const [form, setForm] = useState({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), cost: '', reason: '', supplierId: String(suppliers[0]?.id || ''), location: '' }); return <><section className="panel"><div className="panel-head"><div><h3>Registrar reposicao avulsa</h3><p>Compras fora do ciclo fixo com custo e motivo</p></div></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSubmit({ itemId: Number(form.itemId), quantity: Number(form.quantity), date: form.date, cost: Number(form.cost || 0), reason: form.reason, supplierId: Number(form.supplierId), location: '' }); setForm({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), cost: '', reason: '', supplierId: String(suppliers[0]?.id || ''), location: '' }); }}><Field label="Item"><SearchableSelect items={items} value={form.itemId} onChange={(val) => setForm({ ...form, itemId: val })} placeholder="Digite para buscar item..." /></Field><Field label="Quantidade"><input type="number" min="0.01" step="0.01" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} /></Field><Field label="Data"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><Field label="Custo"><input type="number" min="0" step="0.01" value={form.cost} onChange={(event) => setForm({ ...form, cost: event.target.value })} /></Field><Field label="Motivo"><input value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></Field><Field label="Fornecedor"><SearchableSelect items={suppliers} value={form.supplierId} onChange={(val) => setForm({ ...form, supplierId: val })} placeholder="Digite para buscar fornecedor..." /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar reposicao</button></div></form></section><section className="panel"><div className="panel-head"><div><h3>Historico de reposicoes avulsas</h3><p>Compras fora do planejamento</p></div></div><div className="stack">{entries.map((entry) => <div className="entry-card" key={entry.id}><div><strong>{itemsById[entry.itemId]?.name || 'Item removido'}</strong><p>{entry.reason}</p></div><div className="entry-meta"><span>{entry.quantity} {itemsById[entry.itemId]?.unit || ''}</span><span>{currency(entry.cost)}</span><span>{formatDate(entry.date)}</span><span>{suppliersById[entry.supplierId]?.name || entry.location || 'Fornecedor nao informado'}</span></div></div>)}</div></section></>; }
+function MovementForm({ title, items, onSubmit }) {
+  const [form, setForm] = useState({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), notes: '' });
+  const [usePackage, setUsePackage] = useState(false);
+  const [packQty, setPackQty] = useState(1);
+  const selectedItem = items.find((i) => String(i.id) === String(form.itemId));
+  const hasPackage = selectedItem?.packUnit && Number(selectedItem?.packSize || 1) > 1;
+  const packSize = Number(selectedItem?.packSize || 1);
+  const packUnit = selectedItem?.packUnit || '';
+  const baseUnit = selectedItem?.unit || '';
+  const handleItemChange = (val) => { setForm({ ...form, itemId: val }); setUsePackage(false); setPackQty(1); };
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    const qty = usePackage && hasPackage ? packQty * packSize : Number(form.quantity);
+    onSubmit({ itemId: Number(form.itemId), quantity: qty, date: form.date, notes: form.notes });
+    setForm({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), notes: '' });
+    setUsePackage(false); setPackQty(1);
+  };
+  return <section className="panel">
+    <div className="panel-head"><div><h3>{title}</h3><p>Registro de movimentacao de estoque</p></div></div>
+    <form className="form-grid" onSubmit={handleSubmit}>
+      <Field label="Item"><SearchableSelect items={items} value={form.itemId} onChange={handleItemChange} placeholder="Digite para buscar item..." /></Field>
+      {hasPackage ? <Field label="Modo de entrada"><div className="pack-toggle"><button type="button" className={!usePackage ? 'primary-button' : 'ghost-button'} onClick={() => setUsePackage(false)}>Por {baseUnit}</button><button type="button" className={usePackage ? 'primary-button' : 'ghost-button'} onClick={() => setUsePackage(true)}>Por {packUnit}</button></div></Field> : null}
+      {usePackage && hasPackage
+        ? <Field label={`Quantidade (${packUnit})`}><input type="number" min="1" step="1" value={packQty} onChange={(e) => setPackQty(Number(e.target.value) || 1)} /><div className="pack-preview">{packQty} {packUnit} = {packQty * packSize} {baseUnit}</div></Field>
+        : <Field label={`Quantidade${hasPackage ? ` (${baseUnit})` : ''}`}><input type="number" min="0" step="any" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} /></Field>
+      }
+      <Field label="Data"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field>
+      <Field label="Observacao"><input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field>
+      <div className="actions-row"><button className="primary-button" type="submit">Salvar</button></div>
+    </form>
+  </section>;
+}
+function ExtraForm({ items, entries, onSubmit, itemsById, suppliers, suppliersById }) { const [form, setForm] = useState({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), cost: '', reason: '', supplierId: String(suppliers[0]?.id || ''), location: '' }); return <><section className="panel"><div className="panel-head"><div><h3>Registrar reposicao avulsa</h3><p>Compras fora do ciclo fixo com custo e motivo</p></div></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSubmit({ itemId: Number(form.itemId), quantity: Number(form.quantity), date: form.date, cost: Number(form.cost || 0), reason: form.reason, supplierId: Number(form.supplierId), location: '' }); setForm({ itemId: String(items[0]?.id || ''), quantity: 1, date: todayString(), cost: '', reason: '', supplierId: String(suppliers[0]?.id || ''), location: '' }); }}><Field label="Item"><SearchableSelect items={items} value={form.itemId} onChange={(val) => setForm({ ...form, itemId: val })} placeholder="Digite para buscar item..." /></Field><Field label="Quantidade"><input type="number" min="0" step="any" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} /></Field><Field label="Data"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><Field label="Custo"><input type="number" min="0" step="0.01" value={form.cost} onChange={(event) => setForm({ ...form, cost: event.target.value })} /></Field><Field label="Motivo"><input value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></Field><Field label="Fornecedor"><SearchableSelect items={suppliers} value={form.supplierId} onChange={(val) => setForm({ ...form, supplierId: val })} placeholder="Digite para buscar fornecedor..." /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar reposicao</button></div></form></section><section className="panel"><div className="panel-head"><div><h3>Histórico de reposições avulsas</h3><p>Compras fora do planejamento</p></div></div><div className="stack">{entries.map((entry) => <div className="entry-card" key={entry.id}><div><strong>{itemsById[entry.itemId]?.name || 'Item removido'}</strong><p>{entry.reason}</p></div><div className="entry-meta"><span>{entry.quantity} {itemsById[entry.itemId]?.unit || ''}</span><span>{currency(entry.cost)}</span><span>{formatDate(entry.date)}</span><span>{suppliersById[entry.supplierId]?.name || entry.location || 'Fornecedor nao informado'}</span></div></div>)}</div></section></>; }
 // Helper: ordena por nome alfabeticamente
 const sortByName = (arr) => [...arr].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt-BR'));
 
@@ -1147,18 +1237,29 @@ function SearchableSelect({ items, value, onChange, placeholder = 'Selecione...'
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  return <div ref={ref} style={{ position: 'relative' }}>
+  useEffect(() => {
+    const panel = ref.current?.closest('.panel');
+    if (!panel) return undefined;
+    const previousZIndex = panel.style.zIndex;
+    panel.style.zIndex = open ? '12' : previousZIndex || '';
+    return () => {
+      panel.style.zIndex = previousZIndex;
+    };
+  }, [open]);
+
+  return <div ref={ref} style={{ position: 'relative', zIndex: open ? 20 : 1 }}>
     <input
       value={open ? search : (selected ? (labelFn ? labelFn(selected) : selected.name) : '')}
       placeholder={placeholder}
       onFocus={() => { setOpen(true); setSearch(''); }}
+      onClick={() => { setOpen(true); setSearch(''); }}
       onChange={(e) => setSearch(e.target.value)}
       style={{ width: '100%', padding: '11px 12px', borderRadius: '12px', border: '1px solid var(--line)', background: '#fff', color: 'var(--text)' }}
       autoComplete="off"
     />
     {open && <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, maxHeight: '200px', overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: '0 0 12px 12px', zIndex: 50, boxShadow: 'var(--shadow)' }}>
       {filtered.length === 0 ? <div style={{ padding: '10px 12px', color: 'var(--muted)' }}>Nenhum resultado</div> : filtered.map((item) => (
-        <div key={item.id} onClick={() => { onChange(String(item.id)); setOpen(false); setSearch(''); }}
+        <div key={item.id} onMouseDown={(e) => { e.preventDefault(); onChange(String(item.id)); setOpen(false); setSearch(''); }}
           style={{ padding: '10px 12px', cursor: 'pointer', background: String(item.id) === String(value) ? 'var(--info-soft)' : 'transparent' }}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--neutral-soft)'; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = String(item.id) === String(value) ? 'var(--info-soft)' : 'transparent'; }}>
@@ -1169,50 +1270,80 @@ function SearchableSelect({ items, value, onChange, placeholder = 'Selecione...'
   </div>;
 }
 
+function ConfirmModal({ title, message, onConfirm, onCancel, confirmLabel = 'Confirmar', danger = false }) {
+  return <div className="modal-overlay"><div className="modal-content" style={{ maxWidth: '420px' }}>
+    <div className="panel-head"><div><h3>{title}</h3><p>{message}</p></div></div>
+    <div className="actions-row">
+      <button className="primary-button" type="button" style={danger ? { background: '#e74c3c' } : {}} onClick={onConfirm}>{confirmLabel}</button>
+      <button className="ghost-button" type="button" onClick={onCancel}>Cancelar</button>
+    </div>
+  </div></div>;
+}
+
 function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete }) {
-  const emptyForm = { name: '', unit: 'un', quantity: 0, minStock: 1, weeklyConsumption: 0 };
+  const emptyForm = { name: '', unit: 'un', quantity: 0, minStock: 1, weeklyConsumption: 0, packUnit: '', packSize: 1, brand: '', itemNotes: '' };
   const [addForm, setAddForm] = useState(emptyForm);
   const [editItem, setEditItem] = useState(null);
+  const [pendingEditPayload, setPendingEditPayload] = useState(null);
+  const [confirmDeleteItem, setConfirmDeleteItem] = useState(null);
   const [itemSearch, setItemSearch] = useState('');
   const handleAdd = (event) => {
     event.preventDefault();
     if (!addForm.name.trim()) return;
-    onAdd({ name: addForm.name.trim(), unit: addForm.unit, quantity: Number(addForm.quantity || 0), minStock: Number(addForm.minStock || 1), weeklyConsumption: Number(addForm.weeklyConsumption || 0) });
+    onAdd({ name: addForm.name.trim(), unit: addForm.unit, quantity: Number(addForm.quantity || 0), minStock: Number(addForm.minStock || 1), weeklyConsumption: Number(addForm.weeklyConsumption || 0), packUnit: addForm.packUnit || '', packSize: Number(addForm.packSize || 1), brand: addForm.brand.trim(), itemNotes: addForm.itemNotes.trim() });
     setAddForm(emptyForm);
   };
   const handleEditSave = (event) => {
     event.preventDefault();
     if (!editItem?.name?.trim()) return;
-    onUpdate(editItem.id, { name: editItem.name.trim(), unit: editItem.unit, quantity: Number(editItem.quantity || 0), minStock: Number(editItem.minStock || 1), weeklyConsumption: Number(editItem.weeklyConsumption || 0) });
+    setPendingEditPayload({ id: editItem.id, name: editItem.name.trim(), unit: editItem.unit, quantity: Number(editItem.quantity || 0), minStock: Number(editItem.minStock || 1), weeklyConsumption: Number(editItem.weeklyConsumption || 0), packUnit: editItem.packUnit || '', packSize: Number(editItem.packSize || 1), brand: (editItem.brand || '').trim(), itemNotes: (editItem.itemNotes || '').trim() });
+  };
+  const confirmEdit = () => {
+    onUpdate(pendingEditPayload.id, pendingEditPayload);
+    setPendingEditPayload(null);
     setEditItem(null);
   };
   return <><section className="panel"><div className="panel-head"><div><h3>Cadastrar novo item</h3><p>Produtos monitorados no estoque do setor</p></div></div>
     <form className="form-grid" onSubmit={handleAdd}>
       <Field label="Nome do item"><input value={addForm.name} onChange={(e) => setAddForm({ ...addForm, name: e.target.value })} placeholder="Ex: Detergente, Papel toalha" required /></Field>
       <Field label="Unidade"><select value={addForm.unit} onChange={(e) => setAddForm({ ...addForm, unit: e.target.value })}>{UNIT_OPTIONS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}</select></Field>
-      <Field label="Quantidade atual"><input type="number" min="0" step="0.01" value={addForm.quantity} onChange={(e) => setAddForm({ ...addForm, quantity: e.target.value })} /></Field>
-      <Field label="Estoque minimo"><input type="number" min="0" step="1" value={addForm.minStock} onChange={(e) => setAddForm({ ...addForm, minStock: e.target.value })} /></Field>
-      <Field label="Consumo semanal"><input type="number" min="0" step="0.1" value={addForm.weeklyConsumption} onChange={(e) => setAddForm({ ...addForm, weeklyConsumption: e.target.value })} /></Field>
+      <Field label="Quantidade atual"><input type="number" min="0" step="any" value={addForm.quantity} onChange={(e) => setAddForm({ ...addForm, quantity: e.target.value })} /></Field>
+      <Field label="Estoque mínimo"><input type="number" min="0" step="1" value={addForm.minStock} onChange={(e) => setAddForm({ ...addForm, minStock: e.target.value })} /></Field>
+      <Field label="Consumo semanal"><input type="number" min="0" step="any" value={addForm.weeklyConsumption} onChange={(e) => setAddForm({ ...addForm, weeklyConsumption: e.target.value })} /></Field>
+      <Field label="Embalagem de compra"><select value={addForm.packUnit} onChange={(e) => { const pu = PACK_UNITS.find((p) => p.value === e.target.value); setAddForm({ ...addForm, packUnit: e.target.value, packSize: pu?.defaultSize - 1 }); }}>{PACK_UNITS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</select></Field>
+      {addForm.packUnit ? <Field label={`Qtd por ${addForm.packUnit}`}><input type="number" min="1" step="1" value={addForm.packSize} onChange={(e) => setAddForm({ ...addForm, packSize: e.target.value })} /></Field> : null}
+      {addForm.packUnit && Number(addForm.packSize) > 0 ? <div className="pack-preview">1 {addForm.packUnit} = {addForm.packSize} {UNIT_MAP[addForm.unit]?.label?.split(' ')[0] || addForm.unit}</div> : null}
+      <Field label="Marca preferida"><input value={addForm.brand} onChange={(e) => setAddForm({ ...addForm, brand: e.target.value })} placeholder="Ex: Ype, Neve, Brilhante..." /></Field>
+      <Field label="Observações do item"><input value={addForm.itemNotes} onChange={(e) => setAddForm({ ...addForm, itemNotes: e.target.value })} placeholder="Ex: Comprar so na promocao, verificar validade..." /></Field>
       <div className="actions-row"><button className="primary-button" type="submit">Cadastrar item</button></div>
     </form></section>
     <section className="panel"><div className="panel-head"><div><h3>Itens cadastrados</h3><p>Lista completa do estoque monitorado</p></div><Badge tone="info">{items.length} item(ns)</Badge></div>
     <div style={{ marginBottom: '12px' }}><input value={itemSearch} onChange={(e) => setItemSearch(e.target.value)} placeholder="Buscar item por nome..." style={{ width: '100%', maxWidth: '400px', padding: '11px 12px', borderRadius: '12px', border: '1px solid var(--line)', background: '#fff' }} /></div>
-    <div className="table-wrap"><table><thead><tr><th>Item</th><th>Unidade</th><th>Quantidade</th><th>Minimo</th><th>Consumo semanal</th><th>Movimentacoes</th><th>Acoes</th></tr></thead><tbody>{sortByName(items).filter((item) => !itemSearch || item.name.toLowerCase().includes(itemSearch.toLowerCase())).map((item) => {
-      const moveCount = movements.filter((m) => m.itemId === item.id).length;
-      const priceCount = priceHistory.filter((p) => p.itemId === item.id).length;
-      return <tr key={item.id}><td><strong>{item.name}</strong></td><td>{item.unit}</td><td>{item.quantity}</td><td>{item.minStock}</td><td>{item.weeklyConsumption}</td><td>{moveCount} mov. / {priceCount} preco(s)</td><td><div className="table-actions"><button className="ghost-button" type="button" onClick={() => setEditItem({ id: item.id, name: item.name, unit: item.unit, quantity: item.quantity, minStock: item.minStock, weeklyConsumption: item.weeklyConsumption || 0 })}>Editar</button><button className="table-action" type="button" onClick={() => onDelete(item.id)}>Excluir</button></div></td></tr>;
+    <div className="table-wrap"><table><thead><tr><th>Item</th><th>Unidade base</th><th>Quantidade</th><th>Embalagem</th><th>Minimo</th><th>Consumo/sem.</th><th>Acoes</th></tr></thead><tbody>{sortByName(items).filter((item) => !itemSearch || item.name.toLowerCase().includes(itemSearch.toLowerCase())).map((item) => {
+      const packSz = Number(item.packSize || 1);
+      const packLbl = item.packUnit && packSz > 1 ? `${item.packUnit} c/ ${packSz}` : '-';
+  const qtyInPacks = item.packUnit && packSz > 1 ? ` (aprox. ${(Number(item.quantity || 0) / packSz).toFixed(1)} ${item.packUnit})` : '';
+      return <tr key={item.id}><td><strong>{item.name}</strong>{item.brand ? <div className="sub-note">{item.brand}</div> : null}{item.itemNotes ? <div className="sub-note" style={{ fontStyle: 'italic' }}>{item.itemNotes}</div> : null}</td><td>{item.unit}</td><td>{item.quantity}{qtyInPacks ? <div className="sub-note">{qtyInPacks}</div> : null}</td><td>{packLbl}</td><td>{item.minStock}</td><td>{item.weeklyConsumption || '-'}</td><td><div className="table-actions"><button className="ghost-button" type="button" onClick={() => setEditItem({ id: item.id, name: item.name, unit: item.unit, quantity: item.quantity, minStock: item.minStock, weeklyConsumption: item.weeklyConsumption || 0, packUnit: item.packUnit || '', packSize: Number(item.packSize || 1), brand: item.brand || '', itemNotes: item.itemNotes || '' })}>Editar</button><button className="table-action" type="button" onClick={() => setConfirmDeleteItem(item)}>Excluir</button></div></td></tr>;
     })}</tbody></table></div></section>
     {editItem ? <div className="modal-overlay"><div className="modal-content">
       <div className="panel-head"><div><h3>Editar item</h3><p>Altere os dados e salve ou cancele.</p></div></div>
       <form className="form-grid" onSubmit={handleEditSave}>
         <Field label="Nome do item"><input value={editItem.name} onChange={(e) => setEditItem({ ...editItem, name: e.target.value })} required /></Field>
         <Field label="Unidade"><select value={editItem.unit} onChange={(e) => setEditItem({ ...editItem, unit: e.target.value })}>{UNIT_OPTIONS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}</select></Field>
-        <Field label="Quantidade atual"><input type="number" min="0" step="0.01" value={editItem.quantity} onChange={(e) => setEditItem({ ...editItem, quantity: e.target.value })} /></Field>
-        <Field label="Estoque minimo"><input type="number" min="0" step="1" value={editItem.minStock} onChange={(e) => setEditItem({ ...editItem, minStock: e.target.value })} /></Field>
-        <Field label="Consumo semanal"><input type="number" min="0" step="0.1" value={editItem.weeklyConsumption} onChange={(e) => setEditItem({ ...editItem, weeklyConsumption: e.target.value })} /></Field>
+        <Field label="Quantidade atual"><input type="number" min="0" step="any" value={editItem.quantity} onChange={(e) => setEditItem({ ...editItem, quantity: e.target.value })} /></Field>
+        <Field label="Estoque mínimo"><input type="number" min="0" step="1" value={editItem.minStock} onChange={(e) => setEditItem({ ...editItem, minStock: e.target.value })} /></Field>
+        <Field label="Consumo semanal"><input type="number" min="0" step="any" value={editItem.weeklyConsumption} onChange={(e) => setEditItem({ ...editItem, weeklyConsumption: e.target.value })} /></Field>
+        <Field label="Embalagem de compra"><select value={editItem.packUnit || ''} onChange={(e) => { const pu = PACK_UNITS.find((p) => p.value === e.target.value); setEditItem({ ...editItem, packUnit: e.target.value, packSize: pu?.defaultSize - 1 }); }}>{PACK_UNITS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</select></Field>
+        {editItem.packUnit ? <Field label={`Qtd por ${editItem.packUnit}`}><input type="number" min="1" step="1" value={editItem.packSize || 1} onChange={(e) => setEditItem({ ...editItem, packSize: e.target.value })} /></Field> : null}
+        {editItem.packUnit && Number(editItem.packSize) > 0 ? <div className="pack-preview">1 {editItem.packUnit} = {editItem.packSize} {UNIT_MAP[editItem.unit]?.label?.split(' ')[0] || editItem.unit} &bull; Estoque: {Number(editItem.quantity || 0)} {editItem.unit} &asymp; {(Number(editItem.quantity || 0) / Number(editItem.packSize || 1)).toFixed(1)} {editItem.packUnit}(s)</div> : null}
+        <Field label="Marca preferida"><input value={editItem.brand || ''} onChange={(e) => setEditItem({ ...editItem, brand: e.target.value })} placeholder="Ex: Ype, Neve..." /></Field>
+        <Field label="Observações do item"><input value={editItem.itemNotes || ''} onChange={(e) => setEditItem({ ...editItem, itemNotes: e.target.value })} placeholder="Ex: Verificar validade" /></Field>
         <div className="actions-row"><button className="primary-button" type="submit">Salvar alteracoes</button><button className="ghost-button" type="button" onClick={() => setEditItem(null)}>Cancelar</button></div>
       </form>
-    </div></div> : null}</>;
+    </div></div> : null}
+    {pendingEditPayload ? <ConfirmModal title="Confirmar alteracoes" message={`Deseja salvar as alteracoes no item "${pendingEditPayload.name}"?`} confirmLabel="Salvar alteracoes" onConfirm={confirmEdit} onCancel={() => setPendingEditPayload(null)} /> : null}
+    {confirmDeleteItem ? <ConfirmModal title="Excluir item" message={`Deseja excluir o item "${confirmDeleteItem.name}"? Esta acao nao pode ser desfeita.`} confirmLabel="Excluir" danger onConfirm={() => { onDelete(confirmDeleteItem.id); setConfirmDeleteItem(null); }} onCancel={() => setConfirmDeleteItem(null)} /> : null}
+  </>;
 }
 
 function ReaderPanel({ state, items, suppliers, onAnalyze, onConfirm, onDraftChange, onSupplierChange, onAccessKeyChange, onAddSupplier, onReset }) {
@@ -1237,10 +1368,56 @@ function ReaderPanel({ state, items, suppliers, onAnalyze, onConfirm, onDraftCha
   return <><section className="panel"><div className="panel-head"><div><h3>Entrada por XML, chave ou comprovante</h3><p>Use XML fiscal quando tiver o arquivo da NFC-e/NF-e. Para foto ou PDF, o sistema usa OCR como contingencia.</p></div>{state.preview || state.draftItems?.length || state.fileName ? <button className="ghost-button" onClick={onReset}>Limpar leitura</button> : null}</div><div className="actions-row" style={{ marginBottom: '12px' }}><button className="primary-button" type="button" onClick={() => window.open(TO_NFCE_CONSULT_URL, '_blank', 'noopener,noreferrer')} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>Consultar NF-e na SEFAZ-TO</button></div><label className={`dropzone ${state.loading ? 'loading' : ''}`}><input type="file" accept="image/*,.pdf,application/pdf,.xml,text/xml,application/xml" onChange={(event) => { const file = event.target.files?.[0]; if (file) onAnalyze(file); }} /><strong>{state.loading ? 'Processando documento fiscal...' : 'Selecionar XML, imagem ou PDF'}</strong><p>{state.fileName || 'XML fiscal e a opcao mais precisa. Imagem/PDF usa OCR.'}</p></label>{state.error ? <p className="error-text">{state.error}</p> : null}{state.preview ? <div className="preview-shell"><img className="preview" src={state.preview} alt="Preview do comprovante" /></div> : null}</section>{state.parsed ? <section className="panel"><div className="panel-head"><div><h3>Conferencia da entrada</h3><p>{state.parsed.mercado || 'Emitente nao identificado'} em {formatDate(state.parsed.data || todayString())} - origem {modeLabel}. Revise antes de importar.</p></div><div className="reader-summary"><Badge tone={state.parsed?.sourceMode === 'xml' ? 'success' : 'info'}>{modeLabel}</Badge><Badge tone="info">{importCount} item(ns)</Badge><Badge tone="neutral">Soma dos itens {currency(importTotal)}</Badge>{receiptTotal ? <Badge tone={totalDiff <= 0.5 ? 'success' : 'warn'}>Total do documento {currency(receiptTotal)}</Badge> : null}<button className="primary-button" onClick={onConfirm}>Importar entrada</button></div></div><div className="form-grid" style={{ marginBottom: '14px' }}><Field label="Fornecedor"><select value={state.supplierId || ''} onChange={(event) => onSupplierChange(event.target.value)}><option value="">Fornecedor nao informado</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select>{!state.supplierId && state.parsed?.mercado && state.parsed.mercado !== 'Emitente nao identificado' ? <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}><Badge tone="info">Emitente: {state.parsed.mercado}</Badge><button className="ghost-button" type="button" style={{ fontSize: '12px', padding: '2px 8px' }} onClick={() => { onAddSupplier({ name: state.parsed.mercado, tradeName: '', type: 'mercado', city: '', state: 'TO', cnpj: state.parsed.cnpj || '', notes: 'Cadastrado automaticamente via importacao de NF', active: true }); }}>Cadastrar fornecedor</button></div> : null}</Field><Field label="Chave de acesso"><input value={state.accessKey || state.parsed?.accessKey || ''} onChange={(event) => onAccessKeyChange(event.target.value)} placeholder="Cole ou confirme a chave de acesso" /></Field></div><div className="reader-summary" style={{ marginBottom: '14px' }}>{state.parsed?.accessKeySource ? <Badge tone={state.parsed.accessKeyValid ? (state.parsed.accessKeySource === 'QR Code' ? 'success' : 'warn') : 'danger'}>Chave via {state.parsed.accessKeySource}{state.parsed.accessKeyValid ? '' : ' (nao validada)'}</Badge> : null}{!state.parsed?.accessKeyValid && state.parsed?.accessKeyCandidates?.length ? <Badge tone="neutral">Candidata: {state.parsed.accessKeyCandidates[0]}</Badge> : null}</div><div className="actions-row" style={{ marginBottom: '14px' }}>{state.queryUrl || state.parsed?.queryUrl ? <button className="ghost-button" type="button" onClick={() => window.open(state.queryUrl || state.parsed?.queryUrl, '_blank', 'noopener,noreferrer')}>Abrir consulta da NFC-e</button> : null}<button className="ghost-button" type="button" onClick={() => openToNfcePortalWithKey(state.accessKey || state.parsed?.accessKey || '')}>Consultar por chave na SEFAZ-TO</button></div>{receiptTotal ? <div className="total-audit"><strong>Diferenca entre total do documento e itens:</strong> <span className={totalDiff <= 0.5 ? 'audit-good' : 'audit-warn'}>{currency(totalDiff)}</span></div> : null}<div className="table-wrap"><table><thead><tr><th>Importar</th><th>Item lido</th><th>Vincular a item cadastrado</th><th>Qtd</th><th>Un</th><th>Valor unit.</th><th>Total linha</th><th>Confianca</th><th></th></tr></thead><tbody>{(state.draftItems || []).map((entry) => { const lineTotal = computeLineTotal(entry.quantidade, entry.preco_unitario, entry.unidade); return <tr key={entry.id}><td><input type="checkbox" checked={entry.include} onChange={(event) => updateDraftItem(entry.id, 'include', event.target.checked)} /></td><td><div className="ocr-cell"><input value={entry.nome} onChange={(event) => updateDraftItem(entry.id, 'nome', event.target.value)} />{entry.rawLine ? <small>{entry.rawLine}</small> : null}</div></td><td><select value={entry.matchedItemId || ''} onChange={(event) => updateDraftItem(entry.id, 'matchedItemId', event.target.value)}><option value="">Criar como novo item</option>{sortByName(items).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></td><td><input type="number" min="0" step="0.01" value={entry.quantidade} onChange={(event) => updateDraftItem(entry.id, 'quantidade', Number(event.target.value))} /></td><td><select value={normalizeUnit(entry.unidade || 'un')} onChange={(event) => updateDraftItem(entry.id, 'unidade', event.target.value)}>{UNIT_OPTIONS.map((unit) => <option key={unit.value} value={unit.value}>{unit.value}</option>)}</select></td><td><input type="number" min="0" step="0.01" value={entry.preco_unitario} onChange={(event) => updateDraftItem(entry.id, 'preco_unitario', Number(event.target.value))} /></td><td>{currency(lineTotal)}</td><td><Badge tone={entry.confidence >= 0.95 ? 'success' : entry.confidence >= 0.5 ? 'warn' : 'danger'}>{Math.round(Number(entry.confidence || 0) * 100)}%</Badge></td><td><button className="table-action" onClick={() => removeDraftItem(entry.id)}>Excluir</button></td></tr>; })}</tbody></table></div></section> : null}</>;
 }
 
-function PricesPanel({ items, allItems, suppliers, suppliersById, priceMap, filter, onFilterChange, onSubmit }) { const [form, setForm] = useState({ itemId: String(allItems[0]?.id || ''), supplierId: String(suppliers[0]?.id || ''), price: '', date: todayString() }); return <><section className="panel"><div className="panel-head"><div><h3>Historico de precos</h3><p>Comparativo por item e por fornecedor</p></div><select value={filter} onChange={(event) => onFilterChange(event.target.value)}><option value="">Todos</option>{allItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="stack">{items.map((item) => { const entries = priceMap[item.id] || []; if (!entries.length) return <div className="entry-card" key={item.id}><div><strong>{item.name}</strong><p>Sem historico de precos.</p></div></div>; const latest = entries.at(-1); const previous = entries.length > 1 ? entries.at(-2) : null; const best = [...entries].sort((a, b) => a.price - b.price)[0]; const variation = previous ? ((latest.price - previous.price) / previous.price) * 100 : null; return <div className="entry-card" key={item.id}><div><strong>{item.name}</strong><p>Ultimo preco: {currency(latest.price)} em {suppliersById[latest.supplierId]?.name || latest.market}</p></div><div className="entry-meta">{variation !== null ? <Badge tone={variation > 0 ? 'warn' : variation < 0 ? 'success' : 'neutral'}>{variation > 0 ? 'Alta' : variation < 0 ? 'Queda' : 'Estavel'} {Math.abs(variation).toFixed(1)}%</Badge> : null}<Badge tone="success">Melhor fornecedor: {suppliersById[best.supplierId]?.name || best.market}</Badge></div></div>; })}</div></section><section className="panel"><div className="panel-head"><div><h3>Adicionar preco manual</h3><p>Entrada complementar alem do leitor automatico</p></div></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSubmit({ itemId: Number(form.itemId), supplierId: Number(form.supplierId), price: Number(form.price), date: form.date }); setForm({ itemId: String(allItems[0]?.id || ''), supplierId: String(suppliers[0]?.id || ''), price: '', date: todayString() }); }}><Field label="Item"><select value={form.itemId} onChange={(event) => setForm({ ...form, itemId: event.target.value })}>{allItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><Field label="Fornecedor"><SearchableSelect items={suppliers} value={form.supplierId} onChange={(val) => setForm({ ...form, supplierId: val })} placeholder="Digite para buscar fornecedor..." /></Field><Field label="Preco unitario"><input type="number" min="0" step="0.01" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} /></Field><Field label="Data"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar preco</button></div></form></section></>; }
+function PricesPanel({ items, allItems, suppliers, suppliersById, priceMap, filter, onFilterChange, onSubmit }) { const [form, setForm] = useState({ itemId: String(allItems[0]?.id || ''), supplierId: String(suppliers[0]?.id || ''), price: '', date: todayString() }); return <><section className="panel"><div className="panel-head"><div><h3>Histórico de precos</h3><p>Comparativo por item e por fornecedor</p></div><select value={filter} onChange={(event) => onFilterChange(event.target.value)}><option value="">Todos</option>{allItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="stack">{items.map((item) => { const entries = priceMap[item.id] || []; if (!entries.length) return <div className="entry-card" key={item.id}><div><strong>{item.name}</strong><p>Sem historico de precos.</p></div></div>; const latest = entries.at(-1); const previous = entries.length > 1 ? entries.at(-2) : null; const best = [...entries].sort((a, b) => a.price - b.price)[0]; const variation = previous ? ((latest.price - previous.price) / previous.price) * 100 : null; return <div className="entry-card" key={item.id}><div><strong>{item.name}</strong><p>Ultimo preco: {currency(latest.price)} em {suppliersById[latest.supplierId]?.name || latest.market}</p></div><div className="entry-meta">{variation !== null ? <Badge tone={variation > 0 ? 'warn' : variation < 0 ? 'success' : 'neutral'}>{variation > 0 ? 'Alta' : variation < 0 ? 'Queda' : 'Estavel'} {Math.abs(variation).toFixed(1)}%</Badge> : null}<Badge tone="success">Melhor fornecedor: {suppliersById[best.supplierId]?.name || best.market}</Badge></div></div>; })}</div></section><section className="panel"><div className="panel-head"><div><h3>Adicionar preco manual</h3><p>Entrada complementar alem do leitor automatico</p></div></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSubmit({ itemId: Number(form.itemId), supplierId: Number(form.supplierId), price: Number(form.price), date: form.date }); setForm({ itemId: String(allItems[0]?.id || ''), supplierId: String(suppliers[0]?.id || ''), price: '', date: todayString() }); }}><Field label="Item"><select value={form.itemId} onChange={(event) => setForm({ ...form, itemId: event.target.value })}>{allItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><Field label="Fornecedor"><SearchableSelect items={suppliers} value={form.supplierId} onChange={(val) => setForm({ ...form, supplierId: val })} placeholder="Digite para buscar fornecedor..." /></Field><Field label="Preco unitario"><input type="number" min="0" step="0.01" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} /></Field><Field label="Data"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar preco</button></div></form></section></>; }
+const SUPPLIER_TYPES = [
+  { group: 'Comércio / Produtos', options: [
+    { value: 'mercado',       label: 'Mercado / Supermercado' },
+    { value: 'atacado',       label: 'Atacado / Atacarejo' },
+    { value: 'distribuidor',  label: 'Distribuidora' },
+    { value: 'acougue',       label: 'Açougue / Frigorífico' },
+    { value: 'farmacia',      label: 'Farmacia / Drogaria' },
+    { value: 'padaria',       label: 'Padaria / Confeitaria' },
+    { value: 'hortifruti',    label: 'Hortifruti / Verdureiro' },
+    { value: 'loja_material', label: 'Loja de Materiais / Construção' },
+    { value: 'papelaria',     label: 'Papelaria / Escritório' },
+    { value: 'pet',           label: 'Pet Shop' },
+  ]},
+  { group: 'Prestadores de Serviço', options: [
+    { value: 'prestador',     label: 'Prestador de Serviço (geral)' },
+    { value: 'eletricista',   label: 'Eletricista' },
+    { value: 'encanador',     label: 'Encanador / Hidráulica' },
+    { value: 'pintor',        label: 'Pintor / Pinturas prediais' },
+    { value: 'manut_ac',      label: 'Manutenção de Ar Condicionado' },
+    { value: 'manut_predial', label: 'Manutenção Predial / Conservação' },
+    { value: 'dedetizadora',  label: 'Dedetizadora / Controle de Pragas' },
+    { value: 'jardinagem',    label: 'Jardinagem / Paisagismo / Grama' },
+    { value: 'piscina',       label: 'Limpeza de Piscina' },
+    { value: 'limpeza',       label: 'Empresa de Limpeza' },
+    { value: 'impressora',    label: 'Técnico de Impressoras / TI' },
+    { value: 'seguranca',     label: 'Seguranca / Monitoramento' },
+    { value: 'transporte',    label: 'Transporte / Logística' },
+    { value: 'grafica',       label: 'Gráfica / Comunicação Visual' },
+    { value: 'contábilidade', label: 'Contabilidade / Assessoria' },
+  ]},
+  { group: 'Outros', options: [
+    { value: 'outro', label: 'Outro' },
+  ]},
+];
+const supplierTypeLabel = (value) => {
+  for (const group of SUPPLIER_TYPES) {
+    const found = group.options.find((o) => o.value === value);
+    if (found) return found.label;
+  }
+  return value || '-';
+};
+
 function SuppliersPanel({ suppliers, priceHistory, extraPurchases, onSubmit, onUpdate, onDelete }) {
-  const emptyForm = { id: null, name: '', tradeName: '', type: 'mercado', city: '', state: 'SP', cnpj: '', notes: '' };
-  const [form, setForm] = useState(emptyForm);
+  const emptyAddForm = { name: '', tradeName: '', type: 'mercado', city: '', state: 'SP', cnpj: '', notes: '' };
+  const emptyEditModal = { open: false, id: null, name: '', tradeName: '', type: 'mercado', city: '', state: 'SP', cnpj: '', notes: '' };
+  const [addForm, setAddForm] = useState(emptyAddForm);
+  const [editModal, setEditModal] = useState(emptyEditModal);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [pendingUpdatePayload, setPendingUpdatePayload] = useState(null);
   const supplierUsage = suppliers.reduce((acc, supplier) => {
     acc[supplier.id] = {
       prices: priceHistory.filter((entry) => entry.supplierId === supplier.id).length,
@@ -1248,10 +1425,42 @@ function SuppliersPanel({ suppliers, priceHistory, extraPurchases, onSubmit, onU
     };
     return acc;
   }, {});
-  const isEditing = Boolean(form.id);
-  const resetForm = () => setForm(emptyForm);
-  return <><section className="panel"><div className="panel-head"><div><h3>{isEditing ? 'Editar fornecedor' : 'Cadastro de fornecedores'}</h3><p>Padronize os locais de compra para usar em reposicoes, precos e leitor de NF</p></div>{isEditing ? <button className="ghost-button" type="button" onClick={resetForm}>Cancelar</button> : null}</div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); if (!form.name.trim()) return; const payload = { name: form.name.trim(), tradeName: form.tradeName.trim(), type: form.type, city: form.city.trim(), state: form.state.trim().toUpperCase(), cnpj: form.cnpj.trim(), notes: form.notes.trim(), active: true }; if (isEditing) { onUpdate(form.id, payload); } else { onSubmit(payload); } resetForm(); }}><Field label="Nome"><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><Field label="Nome fantasia"><input value={form.tradeName} onChange={(event) => setForm({ ...form, tradeName: event.target.value })} /></Field><Field label="Tipo"><select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}><option value="mercado">Mercado</option><option value="atacado">Atacado</option><option value="distribuidor">Distribuidor</option><option value="acougue">Acougue</option><option value="farmacia">Farmacia</option><option value="outro">Outro</option></select></Field><Field label="Cidade"><input value={form.city} onChange={(event) => setForm({ ...form, city: event.target.value })} /></Field><Field label="UF"><input maxLength="2" value={form.state} onChange={(event) => setForm({ ...form, state: event.target.value })} /></Field><Field label="CNPJ"><input value={form.cnpj} onChange={(event) => setForm({ ...form, cnpj: event.target.value })} /></Field><Field label="Observacoes"><input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">{isEditing ? 'Salvar alteracoes' : 'Cadastrar fornecedor'}</button></div></form></section><section className="panel"><div className="panel-head"><div><h3>Fornecedores cadastrados</h3><p>Lista padronizada para selecao em todo o sistema</p></div><Badge tone="info">{suppliers.length} fornecedor(es)</Badge></div><div className="table-wrap"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Cidade/UF</th><th>CNPJ</th><th>Uso</th><th>Status</th><th>Observacoes</th><th>Acoes</th></tr></thead><tbody>{suppliers.map((supplier) => { const usage = supplierUsage[supplier.id] || { prices: 0, extras: 0 }; const usageCount = usage.prices + usage.extras; return <tr key={supplier.id}><td><strong>{supplier.name}</strong>{supplier.tradeName ? <div className="sub-note">{supplier.tradeName}</div> : null}</td><td>{supplier.type}</td><td>{[supplier.city, supplier.state].filter(Boolean).join('/') || '-'}</td><td>{supplier.cnpj || '-'}</td><td>{usageCount ? `${usage.prices} preco(s) / ${usage.extras} reposicao(oes)` : 'Sem uso'}</td><td><Badge tone={supplier.active ? 'success' : 'neutral'}>{supplier.active ? 'Ativo' : 'Inativo'}</Badge></td><td>{supplier.notes || '-'}</td><td><div className="table-actions"><button className="ghost-button" type="button" onClick={() => setForm({ id: supplier.id, name: supplier.name || '', tradeName: supplier.tradeName || '', type: supplier.type || 'mercado', city: supplier.city || '', state: supplier.state || 'SP', cnpj: supplier.cnpj || '', notes: supplier.notes || '' })}>Editar</button><button className="table-action" type="button" onClick={() => onDelete(supplier.id)}>Excluir</button></div></td></tr>; })}</tbody></table></div></section></>; }
-// Máscara de valor em Real: digita "12345" → exibe "R$ 123,45"
+  const closeEditModal = () => setEditModal(emptyEditModal);
+  return <>
+    {editModal.open && <div className="modal-overlay"><div className="modal-content">
+      <div className="panel-head"><div><h3>Editar fornecedor</h3><p>Atualize os dados do fornecedor selecionado</p></div><button className="ghost-button" type="button" onClick={closeEditModal}>Fechar</button></div>
+      <form className="form-grid" onSubmit={(event) => { event.preventDefault(); if (!editModal.name.trim()) return; const payload = { name: editModal.name.trim(), tradeName: editModal.tradeName.trim(), type: editModal.type, city: editModal.city.trim(), state: editModal.state.trim().toUpperCase(), cnpj: editModal.cnpj.trim(), notes: editModal.notes.trim(), active: true }; setPendingUpdatePayload({ id: editModal.id, payload }); }}>
+        <Field label="Nome"><input value={editModal.name} onChange={(e) => setEditModal({ ...editModal, name: e.target.value })} /></Field>
+        <Field label="Nome fantasia"><input value={editModal.tradeName} onChange={(e) => setEditModal({ ...editModal, tradeName: e.target.value })} /></Field>
+        <Field label="Tipo"><select value={editModal.type} onChange={(e) => setEditModal({ ...editModal, type: e.target.value })}>{SUPPLIER_TYPES.map((group) => <optgroup key={group.group} label={group.group}>{group.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</optgroup>)}</select></Field>
+        <Field label="Cidade"><input value={editModal.city} onChange={(e) => setEditModal({ ...editModal, city: e.target.value })} /></Field>
+        <Field label="UF"><input maxLength="2" value={editModal.state} onChange={(e) => setEditModal({ ...editModal, state: e.target.value })} /></Field>
+        <Field label="CNPJ"><input value={editModal.cnpj} onChange={(e) => setEditModal({ ...editModal, cnpj: e.target.value })} /></Field>
+        <Field label="Observações"><input value={editModal.notes} onChange={(e) => setEditModal({ ...editModal, notes: e.target.value })} /></Field>
+        <div className="actions-row"><button className="primary-button" type="submit">Salvar alteracoes</button><button className="ghost-button" type="button" onClick={closeEditModal}>Cancelar</button></div>
+      </form>
+    </div></div>}
+    <section className="panel"><div className="panel-head"><div><h3>Cadastro de fornecedores</h3><p>Padronize os locais de compra para usar em reposições, precos e leitor de NF</p></div></div>
+      <form className="form-grid" onSubmit={(event) => { event.preventDefault(); if (!addForm.name.trim()) return; const payload = { name: addForm.name.trim(), tradeName: addForm.tradeName.trim(), type: addForm.type, city: addForm.city.trim(), state: addForm.state.trim().toUpperCase(), cnpj: addForm.cnpj.trim(), notes: addForm.notes.trim(), active: true }; onSubmit(payload); setAddForm(emptyAddForm); }}>
+        <Field label="Nome"><input value={addForm.name} onChange={(e) => setAddForm({ ...addForm, name: e.target.value })} /></Field>
+        <Field label="Nome fantasia"><input value={addForm.tradeName} onChange={(e) => setAddForm({ ...addForm, tradeName: e.target.value })} /></Field>
+        <Field label="Tipo"><select value={addForm.type} onChange={(e) => setAddForm({ ...addForm, type: e.target.value })}>{SUPPLIER_TYPES.map((group) => <optgroup key={group.group} label={group.group}>{group.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</optgroup>)}</select></Field>
+        <Field label="Cidade"><input value={addForm.city} onChange={(e) => setAddForm({ ...addForm, city: e.target.value })} /></Field>
+        <Field label="UF"><input maxLength="2" value={addForm.state} onChange={(e) => setAddForm({ ...addForm, state: e.target.value })} /></Field>
+        <Field label="CNPJ"><input value={addForm.cnpj} onChange={(e) => setAddForm({ ...addForm, cnpj: e.target.value })} /></Field>
+        <Field label="Observações"><input value={addForm.notes} onChange={(e) => setAddForm({ ...addForm, notes: e.target.value })} /></Field>
+        <div className="actions-row"><button className="primary-button" type="submit">Cadastrar fornecedor</button></div>
+      </form>
+    </section>
+    <section className="panel"><div className="panel-head"><div><h3>Fornecedores cadastrados</h3><p>Lista padronizada para selecao em todo o sistema</p></div><Badge tone="info">{suppliers.length} fornecedor(es)</Badge></div>
+      <div className="table-wrap"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Cidade/UF</th><th>CNPJ</th><th>Uso</th><th>Status</th><th>Observações</th><th>Acoes</th></tr></thead>
+        <tbody>{suppliers.map((supplier) => { const usage = supplierUsage[supplier.id] || { prices: 0, extras: 0 }; const usageCount = usage.prices + usage.extras; return <tr key={supplier.id}><td><strong>{supplier.name}</strong>{supplier.tradeName ? <div className="sub-note">{supplier.tradeName}</div> : null}</td><td><span title={supplier.type}>{supplierTypeLabel(supplier.type)}</span></td><td>{[supplier.city, supplier.state].filter(Boolean).join('/') || '-'}</td><td>{supplier.cnpj || '-'}</td><td>{usageCount ? `${usage.prices} preco(s) / ${usage.extras} reposicao(oes)` : 'Sem uso'}</td><td><Badge tone={supplier.active ? 'success' : 'neutral'}>{supplier.active ? 'Ativo' : 'Inativo'}</Badge></td><td>{supplier.notes || '-'}</td><td><div className="table-actions"><button className="ghost-button" type="button" onClick={() => setEditModal({ open: true, id: supplier.id, name: supplier.name || '', tradeName: supplier.tradeName || '', type: supplier.type || 'mercado', city: supplier.city || '', state: supplier.state || 'SP', cnpj: supplier.cnpj || '', notes: supplier.notes || '' })}>Editar</button><button className="table-action" type="button" onClick={() => setConfirmDeleteId(supplier.id)}>Excluir</button></div></td></tr>; })}</tbody>
+      </table></div>
+    </section>
+    {confirmDeleteId !== null && <ConfirmModal title="Excluir fornecedor" message="Esta acao nao pode ser desfeita. Deseja excluir este fornecedor?" confirmLabel="Excluir" danger onConfirm={() => { onDelete(confirmDeleteId); setConfirmDeleteId(null); }} onCancel={() => setConfirmDeleteId(null)} />}
+    {pendingUpdatePayload && <ConfirmModal title="Salvar alteracoes" message="Confirma as alteracoes feitas neste fornecedor?" confirmLabel="Salvar" onConfirm={() => { onUpdate(pendingUpdatePayload.id, pendingUpdatePayload.payload); setPendingUpdatePayload(null); closeEditModal(); }} onCancel={() => setPendingUpdatePayload(null)} />}
+  </>; }
+// Mascara de valor em real: digita "12345" e exibe "R$ 123,45"
 const formatBrlInput = (raw) => {
   const digits = String(raw).replace(/\D/g, '');
   if (!digits) return '';
@@ -1263,7 +1472,18 @@ const parseBrlInput = (formatted) => {
   if (!digits) return 0;
   return parseInt(digits, 10) / 100;
 };
-
+const normalizeMoneyValue = (value) => {
+  if (typeof value === 'number') return value;
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+  if (raw.includes('R$') || raw.includes(',')) return parseBrlInput(raw);
+  return Number(raw) || 0;
+};
+const formatMoneyForInput = (value) => {
+  const amount = Number(value || 0);
+  if (!amount) return '';
+  return formatBrlInput(Math.round(amount * 100));
+};
 function ReceiptsPanel({ receipts, onAdd, onDelete, suppliersById }) {
   const [form, setForm] = useState({ title: '', valueDisplay: '', valueRaw: '', date: todayString(), notes: '', fileName: '', fileDataUrl: '', fileMimeType: '' });
   const [viewingId, setViewingId] = useState(null);
@@ -1292,14 +1512,653 @@ function ReceiptsPanel({ receipts, onAdd, onDelete, suppliersById }) {
 
   return <>{viewingReceipt && hasFile ? <div className="modal-overlay" onClick={() => setViewingId(null)}><div className="modal-content" onClick={(e) => e.stopPropagation()}><div className="panel-head"><div><h3>{viewingReceipt.title}</h3><p>{formatDate(viewingReceipt.date)} - {currency(viewingReceipt.value)}</p></div><button className="ghost-button" onClick={() => setViewingId(null)}>Fechar</button></div><div className="receipt-viewer">{isPdf ? <iframe src={fileUrl} title="Comprovante PDF" style={{ width: '100%', height: '70vh', border: 'none', borderRadius: '8px' }} /> : isImage ? <img src={fileUrl} alt="Comprovante" style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: '8px' }} /> : <p>Formato nao suportado para visualizacao.</p>}</div><div className="actions-row" style={{ marginTop: '1rem' }}><a className="primary-button" href={fileUrl} download={viewingReceipt.fileName || `comprovante-${viewingReceipt.date}`} style={{ textDecoration: 'none', textAlign: 'center' }}>Baixar arquivo</a><button className="ghost-button" onClick={() => setViewingId(null)}>Fechar</button></div></div></div> : null}
 
-  <section className="panel"><div className="panel-head"><div><h3>Comprovantes</h3><p>Cupons fiscais organizados por mes — {receipts.length} registro(s) no total</p></div><Badge tone="info">{currency(receipts.reduce((sum, r) => sum + (Number(r.value) || 0), 0))} total</Badge></div></section>
+  <section className="panel"><div className="panel-head"><div><h3>Comprovantes</h3><p>Cupons fiscais organizados por mes - {receipts.length} registro(s) no total</p></div><Badge tone="info">{currency(receipts.reduce((sum, r) => sum + (Number(r.value) || 0), 0))} total</Badge></div></section>
 
   <section className="panel"><div className="panel-head"><div><h3>Registrar comprovante manual</h3><p>Use quando nao houver importacao pelo modulo de entrada</p></div></div><form className="form-grid" onSubmit={async (event) => { event.preventDefault(); if (!form.title.trim()) return; onAdd({ title: form.title.trim(), value: parseBrlInput(form.valueRaw), date: form.date, importedAt: timestampString(), notes: form.notes, source: 'manual', fileName: form.fileName, mimeType: form.fileMimeType }, form._file || null); setForm({ title: '', valueDisplay: '', valueRaw: '', date: todayString(), notes: '', fileName: '', fileDataUrl: '', fileMimeType: '', _file: null }); }}><Field label="Titulo"><input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Ex: Compra Mercado Central" /></Field><Field label="Valor (R$)"><input inputMode="numeric" value={form.valueDisplay} onChange={(event) => { const raw = event.target.value.replace(/\D/g, ''); setForm({ ...form, valueRaw: raw, valueDisplay: formatBrlInput(raw) }); }} placeholder="R$ 0,00" /></Field><Field label="Data da compra"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><Field label="Arquivo (imagem ou PDF)"><div className="dropzone" style={{ padding: '14px', minHeight: 'auto' }}><input type="file" accept="image/*,.pdf" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; setForm((prev) => ({ ...prev, fileName: file.name, fileMimeType: file.type, _file: file })); }} />{form.fileName ? <span style={{ color: 'var(--success)', fontWeight: 500 }}>{form.fileName}</span> : <span>Selecionar arquivo</span>}</div></Field><Field label="Observacao"><input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar comprovante</button>{form.fileName ? <button className="ghost-button" type="button" onClick={() => setForm((prev) => ({ ...prev, fileName: '', fileDataUrl: '', fileMimeType: '' }))}>Remover arquivo</button> : null}</div></form></section>
 
-  {!groups.length ? <section className="panel"><EmptyState text="Nenhum comprovante registrado ainda. Importe pelo modulo de entrada ou registre manualmente acima." /></section> : groups.map((group) => <section className="panel" key={group.label}><div className="panel-head"><div><h3>{group.label}</h3><p>{group.receipts.length} comprovante(s)</p></div><Badge tone="neutral">{currency(group.total)}</Badge></div><div className="stack">{group.receipts.map((receipt) => <article className="receipt-item" key={receipt.id}><div className="receipt-item-head"><div><strong>{receipt.title}</strong><p>{currency(receipt.value)}{receipt.supplierId ? ` - ${suppliersById[receipt.supplierId]?.name || 'Fornecedor'}` : ''}</p></div><Badge tone={receipt.source === 'entrada-ocr' ? 'info' : receipt.source === 'xml-fiscal' ? 'success' : 'neutral'}>{receipt.source === 'entrada-ocr' ? 'OCR' : receipt.source === 'xml-fiscal' ? 'XML' : receipt.source === 'pdf-texto' ? 'PDF' : 'Manual'}</Badge></div><div className="receipt-meta"><span>Data: {formatDate(receipt.date)}</span><span>Importado em: {receipt.importedAt ? formatDateTime(receipt.importedAt) : '-'}</span>{receipt.fileName ? <span>Arquivo: {receipt.fileName}</span> : null}{receipt.accessKey ? <span>Chave: {receipt.accessKey}</span> : null}</div>{receipt.notes ? <p>{receipt.notes}</p> : null}<div className="actions-row">{(receipt.filePath || receipt.hasFile || receipt.dataUrl) ? <button className="primary-button" type="button" onClick={() => setViewingId(receipt.id)}>Visualizar</button> : null}{(receipt.filePath || receipt.hasFile || receipt.dataUrl) ? <a className="ghost-button" href={receipt.filePath && window.__api ? window.__api.receiptFileUrl(receipt.id) : receipt.dataUrl} download={receipt.fileName || `comprovante-${receipt.date}`} style={{ textDecoration: 'none', textAlign: 'center' }}>Baixar</a> : null}{receipt.queryUrl ? <button className="ghost-button" type="button" onClick={() => window.open(receipt.queryUrl, '_blank', 'noopener,noreferrer')}>Consultar NFC-e</button> : null}{confirmDeleteId === receipt.id ? <><button className="table-action" style={{ color: '#e74c3c', fontWeight: 'bold' }} type="button" onClick={() => { onDelete(receipt.id); setConfirmDeleteId(null); }}>Confirmar exclusao</button><button className="ghost-button" type="button" onClick={() => setConfirmDeleteId(null)}>Cancelar</button></> : <button className="table-action" type="button" onClick={() => setConfirmDeleteId(receipt.id)}>Excluir</button>}</div></article>)}</div></section>)}</>;
+  {!groups.length ? <section className="panel"><EmptyState text="Nenhum comprovante registrado ainda. Importe pelo modulo de entrada ou registre manualmente acima." /></section> : groups.map((group) => <section className="panel" key={group.label}><div className="panel-head"><div><h3>{group.label}</h3><p>{group.receipts.length} comprovante(s)</p></div><Badge tone="neutral">{currency(group.total)}</Badge></div><div className="stack">{group.receipts.map((receipt) => <article className="receipt-item" key={receipt.id}><div className="receipt-item-head"><div><strong>{receipt.title}</strong><p>{currency(receipt.value)}{receipt.supplierId ? ` - ${suppliersById[receipt.supplierId]?.name || 'Fornecedor'}` : ''}</p></div><Badge tone={receipt.source === 'entrada-ocr' ? 'info' : receipt.source === 'xml-fiscal' ? 'success' : 'neutral'}>{receipt.source === 'entrada-ocr' ? 'OCR' : receipt.source === 'xml-fiscal' ? 'XML' : receipt.source === 'pdf-texto' ? 'PDF' : 'Manual'}</Badge></div><div className="receipt-meta"><span>Data: {formatDate(receipt.date)}</span><span>Importado em: {receipt.importedAt ? formatDateTime(receipt.importedAt) : '-'}</span>{receipt.fileName ? <span>Arquivo: {receipt.fileName}</span> : null}{receipt.accessKey ? <span>Chave: {receipt.accessKey}</span> : null}</div>{receipt.notes ? <p>{receipt.notes}</p> : null}<div className="actions-row">{(receipt.filePath || receipt.hasFile || receipt.dataUrl) ? <button className="primary-button" type="button" onClick={() => setViewingId(receipt.id)}>Visualizar</button> : null}{(receipt.filePath || receipt.hasFile || receipt.dataUrl) ? <a className="ghost-button" href={receipt.filePath && window.__api ? window.__api.receiptFileUrl(receipt.id) : receipt.dataUrl} download={receipt.fileName || `comprovante-${receipt.date}`} style={{ textDecoration: 'none', textAlign: 'center' }}>Baixar</a> : null}{receipt.queryUrl ? <button className="ghost-button" type="button" onClick={() => window.open(receipt.queryUrl, '_blank', 'noopener,noreferrer')}>Consultar NFC-e</button> : null}<button className="table-action" type="button" onClick={() => setConfirmDeleteId(receipt.id)}>Excluir</button></div></article>)}</div></section>)}
+  {confirmDeleteId !== null && <ConfirmModal title="Excluir comprovante" message="Deseja excluir este comprovante permanentemente? Esta acao nao pode ser desfeita." confirmLabel="Excluir" danger onConfirm={() => { onDelete(confirmDeleteId); setConfirmDeleteId(null); }} onCancel={() => setConfirmDeleteId(null)} />}
+</>;
 }
-function SettingsPanel({ state, nextPurchaseDate, onSaveCycle, onSaveSettings, onUpdateConsumption }) { const [cycle, setCycle] = useState(state.cycle); const [settings, setSettings] = useState(state.settings); useEffect(() => { setCycle(state.cycle); setSettings(state.settings); }, [state.cycle, state.settings]); return <><section className="panel"><div className="panel-head"><div><h3>Configuracao do ciclo</h3><p>Ultima compra geral e intervalo fixo</p></div><Badge tone="info">Proxima: {formatDate(safeIsoDate(nextPurchaseDate))}</Badge></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSaveCycle({ lastPurchaseDate: cycle.lastPurchaseDate, intervalDays: Number(cycle.intervalDays) }); }}><Field label="Ultima compra geral"><input type="date" value={cycle.lastPurchaseDate} onChange={(event) => setCycle({ ...cycle, lastPurchaseDate: event.target.value })} /></Field><Field label="Ciclo em dias"><input type="number" min="1" value={cycle.intervalDays} onChange={(event) => setCycle({ ...cycle, intervalDays: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar ciclo</button></div></form></section><section className="panel"><div className="panel-head"><div><h3>Consumo semanal por item</h3><p>Ajuste fino das estimativas de duracao</p></div></div><div className="table-wrap"><table><thead><tr><th>Item</th><th>Unidade</th><th>Consumo semanal</th><th>Estoque atual</th></tr></thead><tbody>{state.items.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.unit}</td><td><input type="number" min="0" step="0.1" value={item.weeklyConsumption} onChange={(event) => onUpdateConsumption(item.id, Number(event.target.value))} /></td><td>{item.quantity} {item.unit}</td></tr>)}</tbody></table></div></section></>; }
-function NewItemForm({ onSubmit }) { const [form, setForm] = useState({ name: '', unit: 'un', quantity: '', minStock: '', weeklyConsumption: '' }); return <><div className="panel-head"><div><h3>Novo item</h3><p>Cadastro rapido para ampliar o estoque base</p></div></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); if (!form.name.trim()) return; onSubmit({ name: form.name.trim(), unit: normalizeUnit(form.unit) || 'un', quantity: Number(form.quantity || 0), minStock: Number(form.minStock || 0), weeklyConsumption: Number(form.weeklyConsumption || 0) }); setForm({ name: '', unit: 'un', quantity: '', minStock: '', weeklyConsumption: '' }); }}><Field label="Nome"><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><Field label="Unidade"><select value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })}>{UNIT_OPTIONS.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}</select></Field><Field label="Quantidade inicial"><input type="number" min="0" step="0.01" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} /></Field><Field label="Estoque minimo"><input type="number" min="0" step="0.01" value={form.minStock} onChange={(event) => setForm({ ...form, minStock: event.target.value })} /></Field><Field label="Consumo semanal"><input type="number" min="0" step="0.01" value={form.weeklyConsumption} onChange={(event) => setForm({ ...form, weeklyConsumption: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Cadastrar item</button></div></form></>; }
+function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, daysUntilNextPurchase, nextPurchaseDate, cycle, priceMap, suppliersById }) {
+  const buildSuggestions = () => items
+    .filter((item) => {
+      const duration = durationForItem(item);
+      return Number(item.quantity || 0) <= Number(item.minStock || 0) || duration < daysUntilNextPurchase;
+    })
+    .map((item) => {
+      const weekly = Number(item.weeklyConsumption || 0);
+      const current = Number(item.quantity || 0);
+      const minStock = Number(item.minStock || 0);
+      const needed = weekly > 0
+        ? Math.ceil(weekly * (daysUntilNextPurchase / 7) + minStock - current)
+        : Math.max(1, Math.ceil(minStock - current));
+      const suggestedQtyBase = Math.max(1, needed);
+      const itemPackSize = Number(item.packSize || 1);
+      const itemPackUnit = item.packUnit || '';
+      const suggestedPacks = itemPackSize > 1 ? Math.ceil(suggestedQtyBase / itemPackSize) : null;
+      const suggestedQty = suggestedPacks !== null ? suggestedPacks * itemPackSize : suggestedQtyBase;
+      const prices = priceMap[item.id] || [];
+      const best = [...prices].sort((a, b) => a.price - b.price)[0] || null;
+      const bestSupplierName = best ? (suppliersById[best.supplierId]?.name || best.market || null) : null;
+      return { ...item, itemPackSize, itemPackUnit, suggestedQty, suggestedPacks, bestSupplierName, isManual: false, included: true, editQty: suggestedPacks - suggestedQty, isPackMode: !!suggestedPacks };
+    })
+    .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt-BR'));
+
+  const [editableList, setEditableList] = useState(() => buildSuggestions());
+  const [addItemId, setAddItemId] = useState('');
+  const [addQty, setAddQty] = useState(1);
+
+  const listIds = new Set(editableList.map((i) => i.id));
+  const availableToAdd = sortByName(items.filter((i) => !listIds.has(i.id)));
+
+  const updateItem = (id, changes) => setEditableList((prev) => prev.map((i) => i.id === id ? { ...i, ...changes } : i));
+  const removeItem = (id) => setEditableList((prev) => prev.filter((i) => i.id !== id));
+  const resetToSuggestions = () => setEditableList(buildSuggestions());
+
+  const addExtraItem = () => {
+    if (!addItemId) return;
+    const item = items.find((i) => String(i.id) === String(addItemId));
+    if (!item || listIds.has(item.id)) return;
+    const itemPackSize = Number(item.packSize || 1);
+    const itemPackUnit = item.packUnit || '';
+    const isPackMode = itemPackSize > 1 && !!itemPackUnit;
+    const prices = priceMap[item.id] || [];
+    const best = [...prices].sort((a, b) => a.price - b.price)[0] || null;
+    const bestSupplierName = best ? (suppliersById[best.supplierId]?.name || best.market || null) : null;
+    setEditableList((prev) => [...prev, { ...item, itemPackSize, itemPackUnit, suggestedQty: null, suggestedPacks: null, bestSupplierName, isManual: true, included: true, editQty: addQty, isPackMode }]);
+    setAddItemId(''); setAddQty(1);
+  };
+
+  const getActualQty = (item) => item.isPackMode ? item.editQty * item.itemPackSize : item.editQty;
+  const getItemCost = (item) => {
+    const prices = priceMap[item.id] || [];
+    const best = [...prices].sort((a, b) => a.price - b.price)[0] || null;
+    return best ? Number((best.price * getActualQty(item)).toFixed(2)) : 0;
+  };
+  const selectedItems = editableList.filter((i) => i.included);
+  const totalSelected = selectedItems.reduce((sum, i) => sum + getItemCost(i), 0);
+
+  const exportCsv = () => {
+    const headers = ['Item', 'Unidade', 'Qtd Atual', 'Estoque Minimo', 'Consumo Semanal', 'Duracao (dias)', 'Status'];
+    const rows = items.map((item) => {
+      const duration = durationForItem(item);
+      const isLow = Number(item.quantity || 0) <= Number(item.minStock || 0);
+      const isVulnerable = !isLow && duration < daysUntilNextPurchase;
+      const status = isLow ? 'Abaixo do minimo' : isVulnerable ? 'Vulneravel' : 'OK';
+      return [item.name, item.unit, item.quantity, item.minStock, item.weeklyConsumption || 0, Number.isFinite(duration) ? duration : 'Sem consumo', status];
+    });
+    const csv = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(';')).join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `estoque-${todayString()}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return <>
+    <div className="report-print-header">
+      <h2>Lista de Compra &mdash; {formatDate(todayString())}</h2>
+      <p>Próxima compra: {formatDate(safeIsoDate(nextPurchaseDate))} &bull; {daysUntilNextPurchase} dias restantes &bull; {selectedItems.length} item(ns)</p>
+    </div>
+
+    <section className="panel no-print">
+      <div className="panel-head">
+        <div><h3>Posicao atual do estoque</h3><p>Todos os {items.length} itens com status e estimativa de duração</p></div>
+        <button className="ghost-button" type="button" onClick={exportCsv}>Exportar CSV</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Item</th><th>Unidade</th><th>Qtd atual</th><th>Estoque min.</th><th>Consumo/sem.</th><th>Dura ate</th><th>Status</th></tr></thead>
+          <tbody>{[...items].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt-BR')).map((item) => {
+            const duration = durationForItem(item);
+            const isLow = Number(item.quantity || 0) <= Number(item.minStock || 0);
+            const isVulnerable = !isLow && duration < daysUntilNextPurchase;
+            const tone = isLow ? 'danger' : isVulnerable ? 'warn' : 'success';
+            const label = isLow ? 'Abaixo do minimo' : isVulnerable ? 'Vulneravel' : 'OK';
+            return <tr key={item.id}><td><strong>{item.name}</strong></td><td>{item.unit}</td><td>{item.quantity}</td><td>{item.minStock}</td><td>{item.weeklyConsumption || '-'}</td><td>{Number.isFinite(duration) ? `${duration} dias` : 'Sem consumo'}</td><td><Badge tone={tone}>{label}</Badge></td></tr>;
+          })}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <section className="panel">
+      <div className="panel-head no-print">
+        <div>
+          <h3>Lista de compra</h3>
+          <p>{selectedItems.length} item(ns) selecionado(s){totalSelected > 0 ? ` - estimado ${currency(totalSelected)}` : ""}</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button className="ghost-button" type="button" onClick={resetToSuggestions}>Restaurar sugestoes</button>
+          <button className="primary-button" type="button" onClick={() => window.print()}>Imprimir lista</button>
+        </div>
+      </div>
+      <div className="report-print-section-title">
+        <h3>Lista de Compra &mdash; {selectedItems.length} item(ns)</h3>
+        <p>Gerado em {formatDate(todayString())} &bull; Próxima compra: {formatDate(safeIsoDate(nextPurchaseDate))}</p>
+      </div>
+
+      {availableToAdd.length > 0 && <div className="no-print" style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginBottom: '16px', flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 220px' }}><SearchableSelect items={availableToAdd} value={addItemId} onChange={setAddItemId} placeholder="Adicionar item a lista..." /></div>
+        <input type="number" min="1" step="1" value={addQty} onChange={(e) => setAddQty(Number(e.target.value) || 1)} style={{ width: '80px', padding: '11px 12px', borderRadius: '12px', border: '1px solid var(--line)' }} />
+        <button className="ghost-button" type="button" onClick={addExtraItem} disabled={!addItemId}>+ Adicionar</button>
+      </div>}
+
+      {!editableList.length
+        ? <EmptyState text="Nenhum item na lista. Use o campo acima para adicionar itens ou verifique as configuracoes de estoque minimo." />
+        : <div className="table-wrap">
+            <table className="purchase-table">
+              <thead><tr><th className="col-check no-print"><input type="checkbox" title={editableList.every((i) => i.included) ? 'Desmarcar todos' : 'Selecionar todos'} checked={editableList.length > 0 && editableList.every((i) => i.included)} ref={(el) => { if (el) el.indeterminate = editableList.some((i) => i.included) && !editableList.every((i) => i.included); }} onChange={(e) => setEditableList((prev) => prev.map((i) => ({ ...i, included: e.target.checked })))} style={{ width: 'auto', cursor: 'pointer', margin: 0 }} /></th><th>Item</th><th>Quantidade</th><th className="no-print">Und.</th><th>Fornecedor</th><th>Custo est.</th><th className="no-print"></th></tr></thead>
+              <tbody>{editableList.map((item) => {
+                const actualQty = getActualQty(item);
+                const cost = item.included ? getItemCost(item) : 0;
+                const qtyLabel = item.isPackMode ? `${item.editQty} ${item.itemPackUnit} (${actualQty} ${item.unit})` : `${item.editQty} ${item.unit}`;
+                return <tr key={item.id} style={{ opacity: item.included ? 1 : 0.4 }} className={item.included ? '' : 'no-print'}>
+                  <td className="col-check">
+                    <input className="no-print" type="checkbox" checked={item.included} onChange={(e) => updateItem(item.id, { included: e.target.checked })} style={{ width: 'auto', cursor: 'pointer', margin: 0 }} />
+                    <span className="print-only print-checkbox"></span>
+                  </td>
+                  <td>
+                    <strong>{item.name}</strong>
+                    {item.brand ? <div className="sub-note">{item.brand}</div> : null}
+                    {item.itemNotes ? <div className="sub-note" style={{ fontStyle: 'italic' }}>{item.itemNotes}</div> : null}
+                    {item.isManual ? <span className="badge info" style={{ fontSize: '10px', marginTop: '4px', display: 'inline-block' }}>Adicionado</span> : null}
+                  </td>
+                  <td>
+                    <div className="no-print" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <input type="number" min="1" step="1" value={item.editQty} onChange={(e) => updateItem(item.id, { editQty: Number(e.target.value) || 1 })} style={{ width: '80px', padding: '6px 8px' }} />
+                      {item.isPackMode && <div className="pack-preview" style={{ fontSize: '11px', padding: '4px 8px' }}>{item.editQty} {item.itemPackUnit} = {actualQty} {item.unit}</div>}
+                    </div>
+                    <span className="print-only">{qtyLabel}</span>
+                  </td>
+                  <td className="no-print">{item.isPackMode ? item.itemPackUnit : item.unit}</td>
+                  <td>{item.bestSupplierName || <span style={{ color: 'var(--muted)' }}>-</span>}</td>
+                  <td>{cost > 0 ? currency(cost) : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
+                  <td className="no-print"><button className="table-action" type="button" onClick={() => removeItem(item.id)} style={{ padding: '5px 8px', fontSize: '12px' }}>Remover</button></td>
+                </tr>;
+              })}</tbody>
+            </table>
+            {totalSelected > 0 && <div style={{ textAlign: 'right', padding: '12px 10px', fontWeight: 600, borderTop: '2px solid var(--line)', marginTop: '2px' }}>
+              Total estimado ({selectedItems.length} item(ns)): <strong>{currency(totalSelected)}</strong>
+            </div>}
+          </div>
+      }
+    </section>
+  </>;
+}
+
+const MAINT_CATEGORIES = [
+  { value: 'ac', label: 'Ar Condicionado', icon: '\u2744\uFE0F' },
+  { value: 'bebedouro', label: 'Bebedouro', icon: '\u{1F4A7}' },
+  { value: 'piscina', label: 'Piscina', icon: '\u{1F3CA}' },
+  { value: 'grama', label: 'Corte de Grama', icon: '\u{1F33F}' },
+  { value: 'impressora', label: 'Impressora', icon: '\u{1F5A8}\uFE0F' },
+  { value: 'outro', label: 'Outro', icon: '\u{1F527}' },
+];
+const MAINT_RECORD_TYPES = [
+  { value: 'preventiva', label: 'Preventiva' },
+  { value: 'corretiva', label: 'Corretiva' },
+  { value: 'limpeza', label: 'Limpeza' },
+  { value: 'troca_filtro', label: 'Troca de Filtro' },
+  { value: 'troca_tinta', label: 'Troca de Tinta' },
+  { value: 'recarga', label: 'Recarga' },
+  { value: 'substituição', label: 'Substituicao' },
+];
+const INVENTORY_FISCAL_CLASSES = [
+  { value: 'processamento_dados', label: 'Proc. de dados', annualRate: 20, residualRate: 10, usefulLifeYears: 5, note: 'Equipamentos de processamento de dados' },
+  { value: 'comunicacao', label: 'Comunicação', annualRate: 10, residualRate: 20, usefulLifeYears: 10, note: 'Aparelhos e equipamentos de comunicacao' },
+  { value: 'audio_video', label: 'Audio/Video', annualRate: 10, residualRate: 10, usefulLifeYears: 10, note: 'Equipamentos de audio, video e foto' },
+  { value: 'outros', label: 'Outros', annualRate: 10, residualRate: 10, usefulLifeYears: 10, note: 'Classe generica para outros bens' },
+];
+const INVENTORY_STATUS = [
+  { value: 'em_uso', label: 'Em uso' },
+  { value: 'em_estoque', label: 'Em estoque' },
+  { value: 'em_manutenção', label: 'Em manutenção' },
+  { value: 'baixado', label: 'Baixado' },
+];
+const getInventoryFiscalClass = (value) => INVENTORY_FISCAL_CLASSES.find((item) => item.value === value) || INVENTORY_FISCAL_CLASSES[0];
+const monthsBetweenDates = (startDate, endDate = new Date()) => {
+  const start = new Date(`${startDate}T12:00:00`);
+  if (Number.isNaN(start.getTime())) return 0;
+  const end = endDate instanceof Date ? endDate : new Date(`${endDate}T12:00:00`);
+  let months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+  if (end.getDate() < start.getDate()) months -= 1;
+  return Math.max(0, months);
+};
+const calculateInventoryDepreciation = (asset) => {
+  const fiscal = getInventoryFiscalClass(asset?.fiscalClass);
+  const annualRate = Number(asset?.depreciationRate || fiscal.annualRate || 0);
+  const quantity = Math.max(1, Number(asset?.stockQuantity || 1));
+  const acquisitionValue = normalizeMoneyValue(asset?.purchaseCost) * quantity;
+  const residualValue = acquisitionValue * ((fiscal.residualRate || 0) / 100);
+  const monthlyRate = annualRate / 12 / 100;
+  const elapsedMonths = monthsBetweenDates(asset?.purchaseDate);
+  const accumulated = Math.min(Math.max(0, acquisitionValue - residualValue), acquisitionValue * monthlyRate * elapsedMonths);
+  const currentValue = Math.max(residualValue, acquisitionValue - accumulated);
+  return {
+    acquisitionValue,
+    residualValue,
+    accumulated,
+    currentValue,
+    annualRate,
+    monthlyRate: monthlyRate * 100,
+    elapsedMonths,
+    usefulLifeYears: annualRate ? 100 / annualRate : 0,
+  };
+};
+const AC_TYPES = ['Split', 'Janela', 'Cassete', 'Piso-teto', 'Central', 'Portatil'];
+
+function assetStatus(asset) {
+  if (!asset.lastMaintenanceDate) return 'overdue';
+  const last = new Date(asset.lastMaintenanceDate);
+  const next = new Date(last.getTime() + Number(asset.intervalDays || 180) * 86400000);
+  const today = new Date();
+  const daysLeft = Math.round((next - today) / 86400000);
+  if (daysLeft <= 0) return 'overdue';
+  if (daysLeft <= 14) return 'due';
+  return 'ok';
+}
+function assetNextDate(asset) {
+  if (!asset.lastMaintenanceDate) return null;
+  const last = new Date(asset.lastMaintenanceDate);
+  return new Date(last.getTime() + Number(asset.intervalDays || 180) * 86400000).toISOString().slice(0, 10);
+}
+function assetDaysLeft(asset) {
+  if (!asset.lastMaintenanceDate) return null;
+  const last = new Date(asset.lastMaintenanceDate);
+  const next = new Date(last.getTime() + Number(asset.intervalDays || 180) * 86400000);
+  return Math.round((next - new Date()) / 86400000);
+}
+
+function MaintenancePanel({ assets, records, suppliers, onAddAsset, onUpdateAsset, onDeleteAsset, onAddRecord, onDeleteRecord }) {
+  const [tab, setTab] = React.useState('overview');
+  const [filterCat, setFilterCat] = React.useState('');
+  const [showAssetModal, setShowAssetModal] = React.useState(false);
+  const [editAsset, setEditAsset] = React.useState(null);
+  const [showRecordModal, setShowRecordModal] = React.useState(null); // assetId
+  const [confirmDelete, setConfirmDelete] = React.useState(null); // { type: 'asset'|'record', id }
+  const [confirmSave, setConfirmSave] = React.useState(null); // { id, payload }
+
+  const emptyAsset = { category: 'ac', name: '', location: '', brand: '', model: '', serialNumber: '', supplierId: '', supplierName: '', intervalDays: 180, lastMaintenanceDate: '', notes: '', btuCapacity: '', acType: 'Split', inkColors: 'C,M,Y,K', poolVolume: '', areaM2: '', filterIntervalDays: 180 };
+  const emptyRecord = { assetId: '', date: new Date().toISOString().slice(0,10), type: 'preventiva', description: '', cost: '', technician: '', supplierId: '', notes: '' };
+
+  const [assetForm, setAssetForm] = React.useState(emptyAsset);
+  const [recordForm, setRecordForm] = React.useState(emptyRecord);
+
+  const filtered = filterCat ? assets.filter((a) => a.category === filterCat) : assets;
+  const overdue = assets.filter((a) => assetStatus(a) === 'overdue');
+  const due = assets.filter((a) => assetStatus(a) === 'due');
+  const ok = assets.filter((a) => assetStatus(a) === 'ok');
+
+  const catInfo = (v) => MAINT_CATEGORIES.find((c) => c.value === v) || MAINT_CATEGORIES[5];
+  const statusTone = (s) => s === 'overdue' ? 'danger' : s === 'due' ? 'warn' : 'success';
+  const statusLabel = (s) => s === 'overdue' ? 'Vencida' : s === 'due' ? 'Próxima' : 'Em dia';
+
+  const openAddAsset = () => { setAssetForm(emptyAsset); setEditAsset(null); setShowAssetModal(true); };
+  const openEditAsset = (a) => { setAssetForm({ ...a, supplierId: a.supplierId || '' }); setEditAsset(a); setShowAssetModal(true); };
+  const saveAsset = () => {
+    const payload = { ...assetForm, intervalDays: Number(assetForm.intervalDays || 180), filterIntervalDays: Number(assetForm.filterIntervalDays || 180), supplierId: assetForm.supplierId || null };
+    if (editAsset) { setConfirmSave({ id: editAsset.id, payload }); setShowAssetModal(false); }
+    else { onAddAsset(payload); setShowAssetModal(false); }
+  };
+
+  const openRecordModal = (assetId) => {
+    setRecordForm({ ...emptyRecord, assetId: String(assetId) });
+    setShowRecordModal(assetId);
+  };
+
+  const tabStyle = (t) => ({ padding: '8px 16px', borderRadius: '10px', border: 'none', cursor: 'pointer', fontWeight: tab === t ? 700 : 400, background: tab === t ? 'var(--navy)' : 'transparent', color: tab === t ? '#fff' : 'var(--text)' });
+
+  return <>
+    {confirmDelete ? <ConfirmModal title={confirmDelete.type === 'asset' ? 'Excluir equipamento?' : 'Excluir registro?'} message={confirmDelete.type === 'asset' ? 'Todos os registros de manutenção vinculados serao removidos.' : 'Esta acao nao pode ser desfeita.'} danger onConfirm={() => { if (confirmDelete.type === 'asset') onDeleteAsset(confirmDelete.id); else onDeleteRecord(confirmDelete.id); setConfirmDelete(null); }} onCancel={() => setConfirmDelete(null)} confirmLabel="Excluir" /> : null}
+    {confirmSave ? <ConfirmModal title="Salvar alteracoes?" message="Confirma a edicao deste equipamento?" onConfirm={() => { onUpdateAsset(confirmSave.id, confirmSave.payload); setConfirmSave(null); }} onCancel={() => setConfirmSave(null)} confirmLabel="Salvar" /> : null}
+
+    {showAssetModal ? <div className="modal-overlay"><div className="modal-content" style={{ maxWidth: '680px' }}>
+      <div className="panel-head"><div><h3>{editAsset ? 'Editar equipamento' : 'Novo equipamento'}</h3><p>Preencha os dados do equipamento/sistema</p></div></div>
+      <div className="form-grid">
+        <Field label="Categoria"><select value={assetForm.category} onChange={(e) => setAssetForm({ ...assetForm, category: e.target.value })}>{MAINT_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.icon} {c.label}</option>)}</select></Field>
+        <Field label="Nome / Identificacao"><input value={assetForm.name} onChange={(e) => setAssetForm({ ...assetForm, name: e.target.value })} placeholder="Ex: Ar Cond. Sala Reuniao A" /></Field>
+        <Field label="Local / Departamento"><input value={assetForm.location} onChange={(e) => setAssetForm({ ...assetForm, location: e.target.value })} placeholder="Ex: 2o andar - RH" /></Field>
+        <Field label="Marca"><input value={assetForm.brand} onChange={(e) => setAssetForm({ ...assetForm, brand: e.target.value })} /></Field>
+        <Field label="Modelo"><input value={assetForm.model} onChange={(e) => setAssetForm({ ...assetForm, model: e.target.value })} /></Field>
+        <Field label="No de serie"><input value={assetForm.serialNumber} onChange={(e) => setAssetForm({ ...assetForm, serialNumber: e.target.value })} /></Field>
+        <Field label="Fornecedor (catálogo)"><select value={assetForm.supplierId} onChange={(e) => setAssetForm({ ...assetForm, supplierId: e.target.value })}><option value="">-- nenhum --</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
+        <Field label="Fornecedor (texto livre)"><input value={assetForm.supplierName} onChange={(e) => setAssetForm({ ...assetForm, supplierName: e.target.value })} placeholder="Nome da empresa de manutenção" /></Field>
+        <Field label="Última manutenção"><input type="date" value={assetForm.lastMaintenanceDate} onChange={(e) => setAssetForm({ ...assetForm, lastMaintenanceDate: e.target.value })} /></Field>
+        <Field label="Intervalo de manutenção (dias)"><input type="number" min="1" step="1" value={assetForm.intervalDays} onChange={(e) => setAssetForm({ ...assetForm, intervalDays: e.target.value })} /></Field>
+        {assetForm.category === 'ac' ? <>
+          <Field label="Capacidade (BTU)"><input value={assetForm.btuCapacity} onChange={(e) => setAssetForm({ ...assetForm, btuCapacity: e.target.value })} placeholder="Ex: 12000" /></Field>
+          <Field label="Tipo de aparelho"><select value={assetForm.acType} onChange={(e) => setAssetForm({ ...assetForm, acType: e.target.value })}>{AC_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select></Field>
+        </> : null}
+        {assetForm.category === 'bebedouro' ? <Field label="Intervalo troca de filtro (dias)"><input type="number" min="1" step="1" value={assetForm.filterIntervalDays} onChange={(e) => setAssetForm({ ...assetForm, filterIntervalDays: e.target.value })} /></Field> : null}
+        {assetForm.category === 'impressora' ? <Field label="Cartuchos / Tintas"><input value={assetForm.inkColors} onChange={(e) => setAssetForm({ ...assetForm, inkColors: e.target.value })} placeholder="Ex: C, M, Y, K, PBK" /></Field> : null}
+        {assetForm.category === 'piscina' ? <Field label="Volume da piscina"><input value={assetForm.poolVolume} onChange={(e) => setAssetForm({ ...assetForm, poolVolume: e.target.value })} placeholder="Ex: 50.000 L" /></Field> : null}
+        {assetForm.category === 'grama' ? <Field label="Area (m2)"><input value={assetForm.areaM2} onChange={(e) => setAssetForm({ ...assetForm, areaM2: e.target.value })} placeholder="Ex: 350" /></Field> : null}
+        <Field label="Observações"><textarea rows="2" value={assetForm.notes} onChange={(e) => setAssetForm({ ...assetForm, notes: e.target.value })} /></Field>
+      </div>
+      <div className="actions-row" style={{ marginTop: '16px' }}>
+        <button className="primary-button" type="button" onClick={saveAsset} disabled={!assetForm.name.trim()}>Salvar equipamento</button>
+        <button className="ghost-button" type="button" onClick={() => setShowAssetModal(false)}>Cancelar</button>
+      </div>
+    </div></div> : null}
+
+    {showRecordModal !== null ? <div className="modal-overlay"><div className="modal-content" style={{ maxWidth: '560px' }}>
+      <div className="panel-head"><div><h3>Registrar manutenção</h3><p>{assets.find((a) => a.id === showRecordModal)?.name}</p></div></div>
+      <div className="form-grid">
+        <Field label="Data"><input type="date" value={recordForm.date} onChange={(e) => setRecordForm({ ...recordForm, date: e.target.value })} /></Field>
+        <Field label="Tipo"><select value={recordForm.type} onChange={(e) => setRecordForm({ ...recordForm, type: e.target.value })}>{MAINT_RECORD_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select></Field>
+        <Field label="Descrição"><input value={recordForm.description} onChange={(e) => setRecordForm({ ...recordForm, description: e.target.value })} placeholder="O que foi feito" /></Field>
+        <Field label="Técnico / Empresa"><input value={recordForm.technician} onChange={(e) => setRecordForm({ ...recordForm, technician: e.target.value })} /></Field>
+        <Field label="Custo (R$)"><input type="number" min="0" step="0.01" value={recordForm.cost} onChange={(e) => setRecordForm({ ...recordForm, cost: e.target.value })} /></Field>
+        <Field label="Fornecedor (catálogo)"><select value={recordForm.supplierId} onChange={(e) => setRecordForm({ ...recordForm, supplierId: e.target.value })}><option value="">-- nenhum --</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
+        <Field label="Observações"><textarea rows="2" value={recordForm.notes} onChange={(e) => setRecordForm({ ...recordForm, notes: e.target.value })} /></Field>
+      </div>
+      <div className="actions-row" style={{ marginTop: '16px' }}>
+        <button className="primary-button" type="button" onClick={() => { onAddRecord({ ...recordForm, supplierId: recordForm.supplierId || null, cost: Number(recordForm.cost || 0) }); setShowRecordModal(null); }}>Salvar registro</button>
+        <button className="ghost-button" type="button" onClick={() => setShowRecordModal(null)}>Cancelar</button>
+      </div>
+    </div></div> : null}
+
+    <section className="panel">
+      <div className="panel-head">
+        <div><h3>Manutenção Predial</h3><p>Controle de equipamentos, sistemas e histórico de manutenções</p></div>
+        <button className="primary-button" type="button" onClick={openAddAsset}>+ Novo equipamento</button>
+      </div>
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
+        {['overview','assets','history'].map((t) => <button key={t} style={tabStyle(t)} onClick={() => setTab(t)}>{t === 'overview' ? '\u{1F4CA} Visão geral' : t === 'assets' ? '\u{1F527} Equipamentos' : '\u{1F4CB} Histórico'}</button>)}
+      </div>
+
+      {tab === 'overview' ? <>
+        <div className="metrics" style={{ marginBottom: '16px' }}>
+          <article className="metric danger"><span>Manutenções vencidas</span><strong>{overdue.length}</strong></article>
+          <article className="metric warn"><span>Próximas (14 dias)</span><strong>{due.length}</strong></article>
+          <article className="metric success"><span>Em dia</span><strong>{ok.length}</strong></article>
+          <article className="metric"><span>Total de equipamentos</span><strong>{assets.length}</strong></article>
+        </div>
+        {overdue.length > 0 ? <><div style={{ fontWeight: 700, marginBottom: '8px', color: 'var(--danger)' }}>{'⚠️'} Requerem atenção imediata</div><div className="stack" style={{ marginBottom: '16px' }}>{overdue.map((a) => <div key={a.id} className="alert-card danger" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}><div><strong>{catInfo(a.category).icon} {a.name}</strong><div style={{ fontSize: '13px', color: 'var(--muted)' }}>{a.location} {a.supplierName ? ` - ${a.supplierName}` : ''}</div><div style={{ fontSize: '12px', marginTop: '2px' }}>{a.lastMaintenanceDate ? `Última: ${formatDate(a.lastMaintenanceDate)}` : 'Sem registro de manutenção'}</div></div><div style={{ display: 'flex', gap: '8px' }}><button className="ghost-button" style={{ padding: '6px 12px', fontSize: '13px' }} onClick={() => openRecordModal(a.id)}>Registrar</button><button className="ghost-button" style={{ padding: '6px 12px', fontSize: '13px' }} onClick={() => openEditAsset(a)}>Editar</button></div></div>)}</div></> : null}
+        {due.length > 0 ? <><div style={{ fontWeight: 700, marginBottom: '8px', color: 'var(--warn)' }}>{'🔔'} Manutenções próximas</div><div className="stack" style={{ marginBottom: '16px' }}>{due.map((a) => <div key={a.id} className="alert-card warn" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}><div><strong>{catInfo(a.category).icon} {a.name}</strong><div style={{ fontSize: '13px', color: 'var(--muted)' }}>{a.location}</div><div style={{ fontSize: '12px', marginTop: '2px' }}>Próxima: {formatDate(assetNextDate(a))} ({assetDaysLeft(a)} dias)</div></div><button className="ghost-button" style={{ padding: '6px 12px', fontSize: '13px' }} onClick={() => openRecordModal(a.id)}>Registrar</button></div>)}</div></> : null}
+        <div style={{ fontWeight: 700, marginBottom: '8px' }}>{'📂'} Por categoria</div>
+        <div className="card-grid">{MAINT_CATEGORIES.map((cat) => { const count = assets.filter((a) => a.category === cat.value).length; const ov = assets.filter((a) => a.category === cat.value && assetStatus(a) === 'overdue').length; const dv = assets.filter((a) => a.category === cat.value && assetStatus(a) === 'due').length; return count > 0 ? <div key={cat.value} className="receipt-card" style={{ cursor: 'pointer' }} onClick={() => { setFilterCat(cat.value); setTab('assets'); }}><div style={{ fontSize: '24px' }}>{cat.icon}</div><div style={{ fontWeight: 700 }}>{cat.label}</div><div style={{ fontSize: '13px', color: 'var(--muted)' }}>{count} equipamento{count !== 1 ? 's' : ''}</div>{ov > 0 ? <span className="badge danger">{ov} vencida{ov !== 1 ? 's' : ''}</span> : dv > 0 ? <span className="badge warn">{dv} próxima{dv !== 1 ? 's' : ''}</span> : <span className="badge success">Em dia</span>}</div> : null; })}</div>
+      </> : null}
+
+      {tab === 'assets' ? <>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px', alignItems: 'center' }}>
+          <span style={{ color: 'var(--muted)', fontSize: '13px' }}>Filtrar:</span>
+          <button style={{ ...tabStyle(filterCat === ''), background: filterCat === '' ? 'var(--navy)' : 'var(--neutral-soft)', color: filterCat === '' ? '#fff' : 'var(--text)', padding: '6px 12px', fontSize: '13px', border: 'none', borderRadius: '8px', cursor: 'pointer' }} onClick={() => setFilterCat('')}>Todos</button>
+          {MAINT_CATEGORIES.map((c) => assets.some((a) => a.category === c.value) ? <button key={c.value} style={{ background: filterCat === c.value ? 'var(--navy)' : 'var(--neutral-soft)', color: filterCat === c.value ? '#fff' : 'var(--text)', padding: '6px 12px', fontSize: '13px', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: filterCat === c.value ? 700 : 400 }} onClick={() => setFilterCat(c.value)}>{c.icon} {c.label}</button> : null)}
+        </div>
+        {filtered.length === 0 ? <div className="empty-state">Nenhum equipamento cadastrado. Clique em "+ Novo equipamento" para começar.</div> :
+        <div className="table-wrap"><table><thead><tr><th>Tipo</th><th>Equipamento</th><th>Local</th><th>Última manutenção</th><th>Próxima manutenção</th><th>Intervalo</th><th>Fornecedor</th><th>Status</th><th></th></tr></thead><tbody>
+          {filtered.sort((a, b) => { const so = { overdue: 0, due: 1, ok: 2 }; return so[assetStatus(a)] - so[assetStatus(b)] || a.name.localeCompare(b.name); }).map((a) => {
+            const st = assetStatus(a); const dl = assetDaysLeft(a); const nd = assetNextDate(a);
+            const sup = suppliers.find((s) => s.id === a.supplierId);
+            return <tr key={a.id}>
+              <td>{catInfo(a.category).icon} <span style={{ fontSize: '12px', color: 'var(--muted)' }}>{catInfo(a.category).label}</span></td>
+              <td><strong>{a.name}</strong>{a.brand || a.model ? <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{[a.brand, a.model].filter(Boolean).join(' - ')}</div> : null}{a.serialNumber ? <div style={{ fontSize: '11px', color: 'var(--muted)' }}>S/N: {a.serialNumber}</div> : null}</td>
+              <td>{a.location || <span style={{ color: 'var(--muted)' }}>--</span>}</td>
+              <td>{a.lastMaintenanceDate ? formatDate(a.lastMaintenanceDate) : <span style={{ color: 'var(--muted)' }}>Não registrada</span>}</td>
+              <td>{nd ? <><div>{formatDate(nd)}</div><div style={{ fontSize: '12px', color: dl <= 0 ? 'var(--danger)' : dl <= 14 ? 'var(--warn)' : 'var(--muted)' }}>{dl <= 0 ? `${Math.abs(dl)} dias atrás` : `em ${dl} dias`}</div></> : <span style={{ color: 'var(--muted)' }}>--</span>}</td>
+              <td>{a.intervalDays} dias</td>
+              <td>{sup ? sup.name : a.supplierName || <span style={{ color: 'var(--muted)' }}>--</span>}</td>
+              <td><span className={`badge ${statusTone(st)}`}>{statusLabel(st)}</span></td>
+              <td><div className="table-actions">
+                <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => openRecordModal(a.id)}>Registrar</button>
+                <button className="ghost-button" style={{ padding: '6px 10px', fontSize: '12px' }} onClick={() => openEditAsset(a)}>Editar</button>
+                <button className="table-action" onClick={() => setConfirmDelete({ type: 'asset', id: a.id })}>Excluir</button>
+              </div></td>
+            </tr>;
+          })}
+        </tbody></table></div>}
+      </> : null}
+
+      {tab === 'history' ? <>
+        {records.length === 0 ? <div className="empty-state">Nenhum registro de manutenção ainda.</div> :
+        <div className="table-wrap"><table><thead><tr><th>Data</th><th>Equipamento</th><th>Tipo</th><th>Descrição</th><th>Técnico</th><th>Custo</th><th></th></tr></thead><tbody>
+          {records.map((rec) => {
+            const asset = assets.find((a) => a.id === rec.assetId);
+            const typeLabel = MAINT_RECORD_TYPES.find((t) => t.value === rec.type)?.label || rec.type;
+            return <tr key={rec.id}>
+              <td>{formatDate(rec.date)}</td>
+              <td>{asset ? <><div>{catInfo(asset.category).icon} {asset.name}</div><div style={{ fontSize: '12px', color: 'var(--muted)' }}>{asset.location}</div></> : <span style={{ color: 'var(--muted)' }}>--</span>}</td>
+              <td><span className="badge neutral">{typeLabel}</span></td>
+              <td>{rec.description || <span style={{ color: 'var(--muted)' }}>--</span>}</td>
+              <td>{rec.technician || <span style={{ color: 'var(--muted)' }}>--</span>}</td>
+              <td>{rec.cost > 0 ? <span className="mono">R$ {Number(rec.cost).toFixed(2)}</span> : <span style={{ color: 'var(--muted)' }}>--</span>}</td>
+              <td><button className="table-action" onClick={() => setConfirmDelete({ type: 'record', id: rec.id })}>Excluir</button></td>
+            </tr>;
+          })}
+        </tbody></table></div>}
+      </> : null}
+    </section>
+  </>;
+}
+
+function InventoryPanel({ assets, suppliers, onAddAsset, onUpdateAsset, onDeleteAsset }) {
+  const [tab, setTab] = React.useState('overview');
+  const [search, setSearch] = React.useState('');
+  const [showAssetModal, setShowAssetModal] = React.useState(false);
+  const [editAsset, setEditAsset] = React.useState(null);
+  const [confirmDelete, setConfirmDelete] = React.useState(null);
+  const emptyAsset = { assetTag: '', barcode: '', serialNumber: '', description: '', department: '', assignedTo: '', purchaseCost: '', stockQuantity: 1, purchaseDate: '', brand: '', model: '', fiscalClass: 'processamento_dados', depreciationRate: 20, supplierId: '', status: 'em_uso', notes: '' };
+  const [assetForm, setAssetForm] = React.useState(emptyAsset);
+
+  const enrichedAssets = assets.map((asset) => ({
+    ...asset,
+    supplier: suppliers.find((supplier) => supplier.id === asset.supplierId),
+    fiscal: getInventoryFiscalClass(asset.fiscalClass),
+    depreciation: calculateInventoryDepreciation(asset),
+  }));
+  const filteredAssets = enrichedAssets.filter((asset) => {
+    const haystack = [asset.assetTag, asset.barcode, asset.serialNumber, asset.description, asset.department, asset.assignedTo, asset.brand, asset.model].filter(Boolean).join(' ').toLowerCase();
+    return !search || haystack.includes(search.toLowerCase());
+  });
+  const totalBookValue = enrichedAssets.reduce((sum, asset) => sum + asset.depreciation.currentValue, 0);
+  const totalAcquisitionValue = enrichedAssets.reduce((sum, asset) => sum + asset.depreciation.acquisitionValue, 0);
+  const allocatedCount = enrichedAssets.filter((asset) => asset.status === 'em_uso').length;
+  const stockCount = enrichedAssets.filter((asset) => asset.status === 'em_estoque').length;
+  const unassignedCount = enrichedAssets.filter((asset) => !asset.department || !asset.assignedTo).length;
+  const openAddAsset = () => { setAssetForm(emptyAsset); setEditAsset(null); setShowAssetModal(true); };
+  const openEditAsset = (asset) => { setAssetForm({ ...asset, purchaseCost: formatMoneyForInput(asset.purchaseCost), supplierId: asset.supplierId || '' }); setEditAsset(asset); setShowAssetModal(true); };
+  const closeModal = () => { setShowAssetModal(false); setEditAsset(null); setAssetForm(emptyAsset); };
+  const selectedFiscal = getInventoryFiscalClass(assetForm.fiscalClass);
+  const previewDepreciation = calculateInventoryDepreciation(assetForm);
+  const saveAsset = () => {
+    const payload = {
+      ...assetForm,
+      purchaseCost: normalizeMoneyValue(assetForm.purchaseCost),
+      stockQuantity: Math.max(0, Number(assetForm.stockQuantity || 1)),
+      depreciationRate: Number(assetForm.depreciationRate || selectedFiscal.annualRate || 0),
+      supplierId: assetForm.supplierId || null,
+    };
+    if (editAsset) onUpdateAsset(editAsset.id, payload);
+    else onAddAsset(payload);
+    closeModal();
+  };
+  const statusTone = (status) => ({ em_uso: 'success', em_estoque: 'info', em_manutenção: 'warn', baixado: 'danger' }[status] || 'neutral');
+  const statusLabel = (status) => INVENTORY_STATUS.find((item) => item.value === status)?.label || status || 'Não informado';
+  const tabStyle = (selected) => ({ padding: '8px 16px', borderRadius: '10px', border: 'none', cursor: 'pointer', fontWeight: tab === selected ? 700 : 400, background: tab === selected ? 'var(--navy)' : 'transparent', color: tab === selected ? '#fff' : 'var(--text)' });
+
+  return <>
+    {confirmDelete ? <ConfirmModal title="Excluir ativo de TI?" message="Esta acao remove o cadastro do inventario." danger onConfirm={() => { onDeleteAsset(confirmDelete.id); setConfirmDelete(null); }} onCancel={() => setConfirmDelete(null)} confirmLabel="Excluir" /> : null}
+    {showAssetModal ? <div className="modal-overlay"><div className="modal-content" style={{ maxWidth: '820px' }}>
+      <div className="panel-head"><div><h3>{editAsset ? 'Editar ativo de TI' : 'Novo ativo de TI'}</h3><p>Cadastro patrimonial com rastreio, alocação e depreciação fiscal automática.</p></div></div>
+      <div className="form-grid">
+        <Field label="Código interno"><input value={assetForm.assetTag} onChange={(e) => setAssetForm({ ...assetForm, assetTag: e.target.value })} placeholder="Etiqueta patrimonial" /></Field>
+        <Field label="Código de barras"><input value={assetForm.barcode} onChange={(e) => setAssetForm({ ...assetForm, barcode: e.target.value })} /></Field>
+        <Field label="Serial number"><input value={assetForm.serialNumber} onChange={(e) => setAssetForm({ ...assetForm, serialNumber: e.target.value })} /></Field>
+        <Field label="Descrição do equipamento"><input value={assetForm.description} onChange={(e) => setAssetForm({ ...assetForm, description: e.target.value })} placeholder="Ex: Notebook Dell Latitude 5440" /></Field>
+        <Field label="Departamento alocado"><input value={assetForm.department} onChange={(e) => setAssetForm({ ...assetForm, department: e.target.value })} placeholder="Ex: Financeiro" /></Field>
+        <Field label="Responsavel de uso"><input value={assetForm.assignedTo} onChange={(e) => setAssetForm({ ...assetForm, assignedTo: e.target.value })} placeholder="Ex: Maria Souza" /></Field>
+        <Field label="Custo de compra (R$)"><input type="text" inputMode="numeric" value={assetForm.purchaseCost} onChange={(e) => setAssetForm({ ...assetForm, purchaseCost: formatBrlInput(e.target.value) })} placeholder="R$ 0,00" /></Field>
+        <Field label="Estoque"><input type="number" min="0" step="1" value={assetForm.stockQuantity} onChange={(e) => setAssetForm({ ...assetForm, stockQuantity: e.target.value })} /></Field>
+        <Field label="Data de compra"><input type="date" value={assetForm.purchaseDate} onChange={(e) => setAssetForm({ ...assetForm, purchaseDate: e.target.value })} /></Field>
+        <Field label="Marca"><input value={assetForm.brand} onChange={(e) => setAssetForm({ ...assetForm, brand: e.target.value })} /></Field>
+        <Field label="Modelo"><input value={assetForm.model} onChange={(e) => setAssetForm({ ...assetForm, model: e.target.value })} /></Field>
+        <Field label="Status"><select value={assetForm.status} onChange={(e) => setAssetForm({ ...assetForm, status: e.target.value })}>{INVENTORY_STATUS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></Field>
+        <Field label="Classe fiscal"><select value={assetForm.fiscalClass} onChange={(e) => { const fiscal = getInventoryFiscalClass(e.target.value); setAssetForm({ ...assetForm, fiscalClass: e.target.value, depreciationRate: fiscal.annualRate }); }}>{INVENTORY_FISCAL_CLASSES.map((item) => <option key={item.value} value={item.value}>{item.label} ({item.annualRate}% a.a.)</option>)}</select></Field>
+        <Field label="Taxa de depreciação (% a.a.)"><input type="number" min="0" step="0.01" value={assetForm.depreciationRate} onChange={(e) => setAssetForm({ ...assetForm, depreciationRate: e.target.value })} /></Field>
+        <Field label="Fornecedor"><select value={assetForm.supplierId} onChange={(e) => setAssetForm({ ...assetForm, supplierId: e.target.value })}><option value="">-- nenhum --</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></Field>
+        <Field label="Observações"><textarea rows="2" value={assetForm.notes} onChange={(e) => setAssetForm({ ...assetForm, notes: e.target.value })} /></Field>
+      </div>
+      <div className="alert-card" style={{ marginTop: '16px' }}>
+        <strong>Preview fiscal</strong>
+        <p>{selectedFiscal.note}. Vida util estimada: {selectedFiscal.usefulLifeYears} anos. Residual de referencia: {selectedFiscal.residualRate}%.</p>
+        <div className="entry-meta" style={{ marginTop: '8px' }}>
+          <span>Valor aquisição: {currency(previewDepreciation.acquisitionValue)}</span>
+          <span>Depreciado: {currency(previewDepreciation.accumulated)}</span>
+          <span>Valor contábil atual: {currency(previewDepreciation.currentValue)}</span>
+        </div>
+      </div>
+      <div className="actions-row" style={{ marginTop: '16px' }}>
+        <button className="primary-button" type="button" onClick={saveAsset} disabled={!assetForm.description.trim()}>Salvar ativo</button>
+        <button className="ghost-button" type="button" onClick={closeModal}>Cancelar</button>
+      </div>
+    </div></div> : null}
+
+    <section className="panel">
+      <div className="panel-head">
+        <div><h3>Inventário de Informática e Comunicação</h3><p>Controle patrimonial de equipamentos com alocação, rastreabilidade e depreciação fiscal.</p></div>
+        <button className="primary-button" type="button" onClick={openAddAsset}>+ Novo ativo</button>
+      </div>
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
+        {['overview', 'assets'].map((item) => <button key={item} style={tabStyle(item)} onClick={() => setTab(item)}>{item === 'overview' ? 'Visão geral' : 'Ativos cadastrados'}</button>)}
+      </div>
+
+      {tab === 'overview' ? <>
+        <div className="metrics" style={{ marginBottom: '16px' }}>
+          <article className="metric"><span>Total de ativos</span><strong>{enrichedAssets.length}</strong></article>
+          <article className="metric success"><span>Alocados</span><strong>{allocatedCount}</strong></article>
+          <article className="metric info"><span>Em estoque</span><strong>{stockCount}</strong></article>
+          <article className={`metric ${unassignedCount ? 'warn' : 'success'}`}><span>Sem responsável/depto</span><strong>{unassignedCount}</strong></article>
+        </div>
+        <div className="panel-grid">
+          <section className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-head"><div><h3>Visão financeira</h3><p>Base de aquisição e valor contábil atual do inventario.</p></div></div>
+            <div className="stack">
+              <div className="entry-card"><strong>Valor de aquisição</strong><p>{currency(totalAcquisitionValue)}</p></div>
+              <div className="entry-card"><strong>Valor contábil atual</strong><p>{currency(totalBookValue)}</p></div>
+              <div className="entry-card"><strong>Depreciação acumulada</strong><p>{currency(totalAcquisitionValue - totalBookValue)}</p></div>
+            </div>
+          </section>
+          <section className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-head"><div><h3>Boas práticas aplicadas</h3><p>Campos inspirados em ITAM e controle patrimonial.</p></div></div>
+            <div className="stack">
+              <div className="alert-card success"><strong>Rastreabilidade</strong><p>Etiqueta interna, código de barras e serial permitem localizar o bem rápidamente.</p></div>
+              <div className="alert-card info"><strong>Responsabilidade</strong><p>Departamento e responsável de uso deixam a guarda do ativo explícita.</p></div>
+              <div className="alert-card warn"><strong>Ciclo de vida</strong><p>Compra, status e classe fiscal ajudam na substituição e no fechamento contábil.</p></div>
+            </div>
+          </section>
+        </div>
+        <div style={{ fontWeight: 700, margin: '16px 0 8px' }}>Distribuição por classe fiscal</div>
+        <div className="card-grid">{INVENTORY_FISCAL_CLASSES.map((item) => {
+          const count = enrichedAssets.filter((asset) => asset.fiscalClass === item.value).length;
+          if (!count) return null;
+          return <div key={item.value} className="receipt-card"><div style={{ fontWeight: 700 }}>{item.label}</div><small>{item.note}</small><span className="badge info">{count} ativo(s)</span><span className="badge neutral">{item.annualRate}% a.a.</span></div>;
+        })}</div>
+      </> : null}
+
+      {tab === 'assets' ? <>
+        <div className="panel-head" style={{ marginBottom: '12px' }}>
+          <div><h3>Ativos cadastrados</h3><p>{'Busca rápida por patrimônio, serial, responsável ou descrição.'}</p></div>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar ativo..." style={{ maxWidth: '320px' }} />
+        </div>
+        {filteredAssets.length === 0 ? <div className="empty-state">Nenhum ativo de TI cadastrado ainda.</div> : <div className="table-wrap"><table><thead><tr><th>Patrimônio</th><th>Equipamento</th><th>Alocação</th><th>Estoque</th><th>Compra</th><th>Depreciação</th><th>Status</th><th></th></tr></thead><tbody>
+          {filteredAssets.sort((a, b) => (a.description || '').localeCompare(b.description || '')).map((asset) => <tr key={asset.id}>
+            <td><strong>{asset.assetTag || '--'}</strong>{asset.barcode ? <div className="sub-note">CB: {asset.barcode}</div> : null}</td>
+            <td><strong>{asset.description}</strong>{asset.brand || asset.model ? <div className="sub-note">{[asset.brand, asset.model].filter(Boolean).join(' - ')}</div> : null}{asset.serialNumber ? <div className="sub-note">S/N: {asset.serialNumber}</div> : null}</td>
+            <td>{asset.department || <span style={{ color: 'var(--muted)' }}>--</span>}{asset.assignedTo ? <div className="sub-note">Resp.: {asset.assignedTo}</div> : null}{asset.supplier ? <div className="sub-note">Fornecedor: {asset.supplier.name}</div> : null}</td>
+            <td>{asset.stockQuantity}</td>
+            <td>{asset.purchaseDate ? <><div>{formatDate(asset.purchaseDate)}</div><div className="sub-note">{currency(asset.depreciation.acquisitionValue)}</div></> : <span style={{ color: 'var(--muted)' }}>Não informada</span>}</td>
+            <td><div>{currency(asset.depreciation.currentValue)}</div><div className="sub-note">{asset.depreciation.annualRate}% a.a. - {asset.fiscal.label}</div></td>
+            <td><span className={`badge ${statusTone(asset.status)}`}>{statusLabel(asset.status)}</span></td>
+            <td><div className="table-actions"><button className="ghost-button" type="button" onClick={() => openEditAsset(asset)}>Editar</button><button className="table-action" type="button" onClick={() => setConfirmDelete(asset)}>Excluir</button></div></td>
+          </tr>)}
+        </tbody></table></div>}
+      </> : null}
+    </section>
+  </>;
+}
+function ConsumptionPanel({ items }) {
+  const [config, setConfig] = React.useState({ people: 20, bathrooms: 2, profile: 'escritorio', femalePercent: 50, cleaningsPerDay: 2, daysPerWeek: 5, periodDays: 30 });
+  const [rates, setRates] = React.useState(() => DEFAULT_CONSUMPTION_RATES.map((r) => ({ ...r, rate: r.rateBase })));
+  const [showRates, setShowRates] = React.useState(false);
+  const activeDays = (config.daysPerWeek / 7) * config.periodDays;
+  const profileMult = CONSUMPTION_PROFILES.find((p) => p.value === config.profile)?.mult || 1;
+  const maleRatio = (100 - Number(config.femalePercent)) / 100;
+  const femaleRatio = Number(config.femalePercent) / 100;
+  const results = rates.map((r) => {
+    let qty = 0;
+    if (r.basis === 'person') qty = r.rate * (maleRatio + femaleRatio * (r.femaleFactor || 1)) * Number(config.people) * profileMult * activeDays;
+    else if (r.basis === 'bathroom_clean') qty = r.rate * Number(config.bathrooms) * Number(config.cleaningsPerDay) * profileMult * activeDays;
+    else qty = r.rate * Number(config.bathrooms) * activeDays;
+    const catalogMatch = items.find((i) => slug(i.name).includes(r.keyword) || r.keyword.includes(slug(i.name).substring(0, 4)));
+    return { ...r, qty: Math.ceil(qty), catalogMatch };
+  });
+  const categories = [...new Set(results.map((r) => r.category))];
+  const profileLabel = CONSUMPTION_PROFILES.find((p) => p.value === config.profile)?.label || '';
+  return <>
+    <section className="panel no-print">
+      <div className="panel-head"><div><h3>Configuração do cálculo</h3><p>Informe os dados da instalação para estimar o consumo no período</p></div></div>
+      <div className="form-grid">
+        <Field label="Número de pessoas"><input type="number" min="1" step="1" value={config.people} onChange={(e) => setConfig({ ...config, people: e.target.value })} /></Field>
+        <Field label="Número de banheiros"><input type="number" min="1" step="1" value={config.bathrooms} onChange={(e) => setConfig({ ...config, bathrooms: e.target.value })} /></Field>
+        <Field label="Perfil de uso"><select value={config.profile} onChange={(e) => setConfig({ ...config, profile: e.target.value })}>{CONSUMPTION_PROFILES.map((p) => <option key={p.value} value={p.value}>{p.label} (x{p.mult})</option>)}</select></Field>
+        <Field label="% de mulheres no local"><input type="number" min="0" max="100" step="1" value={config.femalePercent} onChange={(e) => setConfig({ ...config, femalePercent: e.target.value })} /></Field>
+        <Field label="Limpezas por dia"><input type="number" min="1" step="1" value={config.cleaningsPerDay} onChange={(e) => setConfig({ ...config, cleaningsPerDay: e.target.value })} /></Field>
+        <Field label="Dias úteis por semana"><input type="number" min="1" max="7" step="1" value={config.daysPerWeek} onChange={(e) => setConfig({ ...config, daysPerWeek: e.target.value })} /></Field>
+        <Field label="Período de cálculo (dias)"><input type="number" min="1" step="1" value={config.periodDays} onChange={(e) => setConfig({ ...config, periodDays: e.target.value })} /></Field>
+      </div>
+    </section>
+    <section className="panel no-print">
+      <div className="panel-head">
+        <div><h3>Taxas de consumo</h3><p>Médias de mercado ajustáveis conforme sua realidade</p></div>
+        <button className="ghost-button" type="button" onClick={() => setShowRates(!showRates)}>{showRates ? 'Ocultar taxas' : 'Ajustar taxas'}</button>
+      </div>
+      {showRates ? <div className="table-wrap"><table><thead><tr><th>Produto</th><th>Base de cálculo</th><th>Taxa padrão</th><th>Ajuste personalizado</th></tr></thead><tbody>
+        {rates.map((r, idx) => <tr key={r.id}>
+          <td>{r.name}</td>
+          <td><span className="badge neutral">{r.basis === 'person' ? 'por pessoa / dia' : r.basis === 'bathroom_clean' ? 'por banheiro / limpeza' : 'por banheiro / dia'}</span></td>
+          <td className="mono">{r.rateBase} {r.unit}</td>
+          <td><input type="number" min="0" step="any" value={r.rate} style={{ width: '90px' }} onChange={(e) => setRates(rates.map((x, i) => i === idx ? { ...x, rate: Number(e.target.value) } : x))} /></td>
+        </tr>)}
+      </tbody></table></div> : null}
+    </section>
+    <div className="report-print-header"><h2>Consumo Estimado - {config.periodDays} dias</h2><p>Perfil: {profileLabel} - {config.people} pessoas - {config.bathrooms} banheiro(s) - {config.daysPerWeek} dias úteis/semana - {Math.round(activeDays)} dias ativos</p></div>
+    {categories.map((cat) => {
+      const catItems = results.filter((r) => r.category === cat);
+      return <section key={cat} className="panel">
+        <div className="panel-head"><div><h3>{cat}</h3><p>Estimativa para {config.periodDays} dias ({Math.round(activeDays)} dias ativos)</p></div></div>
+        <div className="table-wrap"><table><thead><tr><th>Produto</th><th>Estimativa</th><th>Un.</th><th>Item no catálogo</th><th>Estoque atual</th><th>Saldo estimado</th></tr></thead>
+        <tbody>{catItems.map((r) => {
+          const match = r.catalogMatch;
+          const stockQty = match ? Number(match.quantity) : null;
+          const balance = stockQty !== null ? stockQty - r.qty : null;
+          const tone = balance === null ? 'neutral' : balance < 0 ? 'danger' : balance < r.qty * 0.2 ? 'warn' : 'success';
+          return <tr key={r.id}>
+            <td>{r.name}</td>
+            <td><strong className="mono">{r.qty}</strong></td>
+            <td>{r.unit}</td>
+            <td>{match ? match.name : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
+            <td>{stockQty !== null ? <span className="mono">{stockQty} {match?.unit}</span> : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
+            <td>{balance !== null ? <span className={`badge ${tone}`}>{balance >= 0 ? `+${balance}` : balance} {match?.unit}</span> : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
+          </tr>;
+        })}</tbody></table></div>
+      </section>;
+    })}
+    <section className="panel no-print">
+      <div className="panel-head"><div><h3>Como interpretar</h3><p>Legenda dos indicadores de saldo</p></div></div>
+      <div className="stack">
+        <div className="alert-card success"><strong>Verde -</strong> Estoque suficiente para cobrir o período com folga (&gt;20% de margem).</div>
+        <div className="alert-card warn"><strong>Amarelo -</strong> Estoque cobre o período, mas com margem abaixo de 20%. Atenção ao prazo de reposição.</div>
+        <div className="alert-card danger"><strong>Vermelho -</strong> Estoque insuficiente para o período. Reposição necessária.</div>
+        <div className="alert-card"><strong>- (não mapeado) -</strong> Produto não encontrado no catálogo. Cadastre o item em <em>Itens</em> para monitorar o estoque.</div>
+        <p className="subtle" style={{ fontSize: '12px', marginTop: '4px' }}>Aviso: os itens com unidade em mL ou g são estimativas brutas. Se o catálogo registra em litros ou kg, verifique a equivalência manualmente.</p>
+      </div>
+    </section>
+  </>;
+}
+function SettingsPanel({ state, nextPurchaseDate, onSaveCycle, onSaveSettings, onUpdateConsumption }) { const [cycle, setCycle] = useState(state.cycle); const [settings, setSettings] = useState(state.settings); useEffect(() => { setCycle(state.cycle); setSettings(state.settings); }, [state.cycle, state.settings]); return <><section className="panel"><div className="panel-head"><div><h3>Configuração do ciclo</h3><p>Última compra geral e intervalo fixo</p></div><Badge tone="info">Próxima: {formatDate(safeIsoDate(nextPurchaseDate))}</Badge></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSaveCycle({ lastPurchaseDate: cycle.lastPurchaseDate, intervalDays: Number(cycle.intervalDays) }); }}><Field label="Última compra geral"><input type="date" value={cycle.lastPurchaseDate} onChange={(event) => setCycle({ ...cycle, lastPurchaseDate: event.target.value })} /></Field><Field label="Ciclo em dias"><input type="number" min="1" value={cycle.intervalDays} onChange={(event) => setCycle({ ...cycle, intervalDays: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar ciclo</button></div></form></section><section className="panel"><div className="panel-head"><div><h3>Consumo semanal por item</h3><p>Ajuste fino das estimativas de duração</p></div></div><div className="table-wrap"><table><thead><tr><th>Item</th><th>Unidade</th><th>Consumo semanal</th><th>Estoque atual</th></tr></thead><tbody>{state.items.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.unit}</td><td><input type="number" min="0" step="any" value={item.weeklyConsumption} onChange={(event) => onUpdateConsumption(item.id, Number(event.target.value))} /></td><td>{item.quantity} {item.unit}</td></tr>)}</tbody></table></div></section></>; }
 function Field({ label, children }) { return <label className="field"><span>{label}</span>{children}</label>; }
 function MetricCard({ label, value, tone = 'neutral' }) { return <article className={`metric ${tone}`}><span>{label}</span><strong>{value}</strong></article>; }
 function Badge({ tone = 'neutral', children }) { return <span className={`badge ${tone}`}>{children}</span>; }
@@ -1307,6 +2166,13 @@ function AlertCard({ tone, title, text }) { return <article className={`alert-ca
 function EmptyState({ text }) { return <div className="empty-state">{text}</div>; }
 
 export default App;
+
+
+
+
+
+
+
 
 
 

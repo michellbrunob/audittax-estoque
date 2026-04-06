@@ -98,6 +98,61 @@ db.exec(`
   -- Seed singletons
   INSERT OR IGNORE INTO cycle (id, lastPurchaseDate, intervalDays) VALUES (1, '', 60);
   INSERT OR IGNORE INTO settings (id, anthropicApiKey) VALUES (1, '');
+
+  CREATE TABLE IF NOT EXISTS maintenance_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL DEFAULT 'outro',
+    name TEXT NOT NULL DEFAULT '',
+    location TEXT DEFAULT '',
+    brand TEXT DEFAULT '',
+    model TEXT DEFAULT '',
+    serialNumber TEXT DEFAULT '',
+    supplierId INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+    supplierName TEXT DEFAULT '',
+    intervalDays INTEGER DEFAULT 180,
+    lastMaintenanceDate TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    btuCapacity TEXT DEFAULT '',
+    acType TEXT DEFAULT '',
+    inkColors TEXT DEFAULT '',
+    poolVolume TEXT DEFAULT '',
+    areaM2 TEXT DEFAULT '',
+    filterIntervalDays INTEGER DEFAULT 180,
+    active INTEGER DEFAULT 1
+  );
+
+  CREATE TABLE IF NOT EXISTS maintenance_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assetId INTEGER NOT NULL REFERENCES maintenance_assets(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    type TEXT DEFAULT 'preventiva',
+    description TEXT DEFAULT '',
+    cost REAL DEFAULT 0,
+    technician TEXT DEFAULT '',
+    supplierId INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+    notes TEXT DEFAULT ''
+  );
+
+  CREATE TABLE IF NOT EXISTS inventory_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assetTag TEXT NOT NULL DEFAULT '',
+    barcode TEXT DEFAULT '',
+    serialNumber TEXT DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    department TEXT DEFAULT '',
+    assignedTo TEXT DEFAULT '',
+    purchaseCost REAL DEFAULT 0,
+    stockQuantity INTEGER DEFAULT 1,
+    purchaseDate TEXT DEFAULT '',
+    brand TEXT DEFAULT '',
+    model TEXT DEFAULT '',
+    fiscalClass TEXT DEFAULT 'processamento_dados',
+    depreciationRate REAL DEFAULT 20,
+    supplierId INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+    status TEXT DEFAULT 'em_uso',
+    notes TEXT DEFAULT '',
+    createdAt TEXT DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 module.exports = { db, DB_PATH, STORAGE_DIR, RECEIPTS_DIR };

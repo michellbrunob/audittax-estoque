@@ -1,4 +1,4 @@
-// API wrapper — comunica com backend SQLite (Express:3333)
+﻿// API wrapper â€” comunica com backend SQLite (Express:3333)
 const API_BASE = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
   ? 'http://127.0.0.1:3333'
   : `http://${window.location.hostname}:3333`;
@@ -17,7 +17,7 @@ const api = {
   // Estado completo (carga inicial)
   getState: () => json('GET', '/api/state'),
 
-  // Migração localStorage → SQLite (uma vez)
+  // MigraÃ§Ã£o localStorage â†’ SQLite (uma vez)
   migrate: (data) => json('POST', '/api/migrate', data),
 
   // Items
@@ -61,6 +61,21 @@ const api = {
     if (file) fd.append('file', file);
     return fetch(`${API_BASE}/api/import-receipt`, { method: 'POST', body: fd }).then((r) => r.json());
   },
+
+  // Maintenance
+  addMaintenanceAsset: (p) => json('POST', '/api/maintenance/assets', p),
+  updateMaintenanceAsset: (id, p) => json('PUT', `/api/maintenance/assets/${id}`, p),
+  deleteMaintenanceAsset: (id) => json('DELETE', `/api/maintenance/assets/${id}`),
+  addMaintenanceRecord: (p) => json('POST', '/api/maintenance/records', p),
+  deleteMaintenanceRecord: (id) => json('DELETE', `/api/maintenance/records/${id}`),
+
+  // IT Inventory
+  addInventoryAsset: (p) => json('POST', '/api/inventory/assets', p),
+  updateInventoryAsset: (id, p) => json('PUT', `/api/inventory/assets/${id}`, p),
+  deleteInventoryAsset: (id) => json('DELETE', `/api/inventory/assets/${id}`),
 };
 
 export default api;
+
+
+

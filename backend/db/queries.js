@@ -132,6 +132,94 @@ const stmtUpdateSettings = db.prepare('UPDATE settings SET anthropicApiKey=@anth
 const getSettings = () => { const s = stmtGetSettings.get(); return s ? { anthropicApiKey: s.anthropicApiKey || '' } : { anthropicApiKey: '' }; };
 const updateSettingsQ = (p) => { stmtUpdateSettings.run({ anthropicApiKey: p.anthropicApiKey || '' }); return getSettings(); };
 
+// ─── Maintenance Assets ───
+const stmtAllAssets = db.prepare('SELECT * FROM maintenance_assets ORDER BY name');
+const stmtGetAsset = db.prepare('SELECT * FROM maintenance_assets WHERE id = ?');
+const stmtInsertAsset = db.prepare('INSERT INTO maintenance_assets (category,name,location,brand,model,serialNumber,supplierId,supplierName,intervalDays,lastMaintenanceDate,notes,btuCapacity,acType,inkColors,poolVolume,areaM2,filterIntervalDays,active) VALUES (@category,@name,@location,@brand,@model,@serialNumber,@supplierId,@supplierName,@intervalDays,@lastMaintenanceDate,@notes,@btuCapacity,@acType,@inkColors,@poolVolume,@areaM2,@filterIntervalDays,@active)');
+const stmtUpdateAsset = db.prepare('UPDATE maintenance_assets SET category=@category,name=@name,location=@location,brand=@brand,model=@model,serialNumber=@serialNumber,supplierId=@supplierId,supplierName=@supplierName,intervalDays=@intervalDays,lastMaintenanceDate=@lastMaintenanceDate,notes=@notes,btuCapacity=@btuCapacity,acType=@acType,inkColors=@inkColors,poolVolume=@poolVolume,areaM2=@areaM2,filterIntervalDays=@filterIntervalDays,active=@active WHERE id=@id');
+const stmtDeleteAsset = db.prepare('DELETE FROM maintenance_assets WHERE id = ?');
+const stmtUpdateAssetLastDate = db.prepare('UPDATE maintenance_assets SET lastMaintenanceDate=@date WHERE id=@id');
+
+const getAllAssets = () => stmtAllAssets.all().map((a) => ({ ...a, active: unbool(a.active) }));
+const getAsset = (id) => { const a = stmtGetAsset.get(id); return a ? { ...a, active: unbool(a.active) } : null; };
+const insertAsset = (p) => {
+  const r = stmtInsertAsset.run({ category: p.category||'outro', name: p.name||'', location: p.location||'', brand: p.brand||'', model: p.model||'', serialNumber: p.serialNumber||'', supplierId: p.supplierId||null, supplierName: p.supplierName||'', intervalDays: Number(p.intervalDays||180), lastMaintenanceDate: p.lastMaintenanceDate||'', notes: p.notes||'', btuCapacity: p.btuCapacity||'', acType: p.acType||'', inkColors: p.inkColors||'', poolVolume: p.poolVolume||'', areaM2: p.areaM2||'', filterIntervalDays: Number(p.filterIntervalDays||180), active: bool(p.active!==false) });
+  return getAsset(Number(r.lastInsertRowid));
+};
+const updateAsset = (id, p) => {
+  stmtUpdateAsset.run({ id, category: p.category||'outro', name: p.name||'', location: p.location||'', brand: p.brand||'', model: p.model||'', serialNumber: p.serialNumber||'', supplierId: p.supplierId||null, supplierName: p.supplierName||'', intervalDays: Number(p.intervalDays||180), lastMaintenanceDate: p.lastMaintenanceDate||'', notes: p.notes||'', btuCapacity: p.btuCapacity||'', acType: p.acType||'', inkColors: p.inkColors||'', poolVolume: p.poolVolume||'', areaM2: p.areaM2||'', filterIntervalDays: Number(p.filterIntervalDays||180), active: bool(p.active!==false) });
+  return getAsset(id);
+};
+const deleteAsset = (id) => stmtDeleteAsset.run(id);
+
+// ─── Maintenance Records ───
+const stmtAllRecords = db.prepare('SELECT * FROM maintenance_records ORDER BY date DESC, id DESC');
+const stmtInsertRecord = db.prepare('INSERT INTO maintenance_records (assetId,date,type,description,cost,technician,supplierId,notes) VALUES (@assetId,@date,@type,@description,@cost,@technician,@supplierId,@notes)');
+const stmtDeleteRecord = db.prepare('DELETE FROM maintenance_records WHERE id = ?');
+
+const getAllRecords = () => stmtAllRecords.all();
+const insertRecord = (p) => {
+  const date = p.date || new Date().toISOString().slice(0,10);
+  const r = stmtInsertRecord.run({ assetId: Number(p.assetId), date, type: p.type||'preventiva', description: p.description||'', cost: Number(p.cost||0), technician: p.technician||'', supplierId: p.supplierId||null, notes: p.notes||'' });
+  stmtUpdateAssetLastDate.run({ id: Number(p.assetId), date });
+  return { id: Number(r.lastInsertRowid), assetId: Number(p.assetId), date, type: p.type||'preventiva', description: p.description||'', cost: Number(p.cost||0), technician: p.technician||'', supplierId: p.supplierId||null, notes: p.notes||'' };
+};
+const deleteRecord = (id) => stmtDeleteRecord.run(id);
+
+// ─── IT Inventory Assets ───
+const stmtAllInventoryAssets = db.prepare('SELECT * FROM inventory_assets ORDER BY description, assetTag');
+const stmtGetInventoryAsset = db.prepare('SELECT * FROM inventory_assets WHERE id = ?');
+const stmtInsertInventoryAsset = db.prepare('INSERT INTO inventory_assets (assetTag,barcode,serialNumber,description,department,assignedTo,purchaseCost,stockQuantity,purchaseDate,brand,model,fiscalClass,depreciationRate,supplierId,status,notes) VALUES (@assetTag,@barcode,@serialNumber,@description,@department,@assignedTo,@purchaseCost,@stockQuantity,@purchaseDate,@brand,@model,@fiscalClass,@depreciationRate,@supplierId,@status,@notes)');
+const stmtUpdateInventoryAsset = db.prepare('UPDATE inventory_assets SET assetTag=@assetTag,barcode=@barcode,serialNumber=@serialNumber,description=@description,department=@department,assignedTo=@assignedTo,purchaseCost=@purchaseCost,stockQuantity=@stockQuantity,purchaseDate=@purchaseDate,brand=@brand,model=@model,fiscalClass=@fiscalClass,depreciationRate=@depreciationRate,supplierId=@supplierId,status=@status,notes=@notes WHERE id=@id');
+const stmtDeleteInventoryAsset = db.prepare('DELETE FROM inventory_assets WHERE id = ?');
+
+const getAllInventoryAssets = () => stmtAllInventoryAssets.all();
+const getInventoryAsset = (id) => stmtGetInventoryAsset.get(id);
+const insertInventoryAsset = (p) => {
+  const r = stmtInsertInventoryAsset.run({
+    assetTag: p.assetTag || '',
+    barcode: p.barcode || '',
+    serialNumber: p.serialNumber || '',
+    description: p.description || '',
+    department: p.department || '',
+    assignedTo: p.assignedTo || '',
+    purchaseCost: Number(p.purchaseCost || 0),
+    stockQuantity: Math.max(0, Number(p.stockQuantity || 1)),
+    purchaseDate: p.purchaseDate || '',
+    brand: p.brand || '',
+    model: p.model || '',
+    fiscalClass: p.fiscalClass || 'processamento_dados',
+    depreciationRate: Number(p.depreciationRate || 20),
+    supplierId: p.supplierId || null,
+    status: p.status || 'em_uso',
+    notes: p.notes || '',
+  });
+  return getInventoryAsset(Number(r.lastInsertRowid));
+};
+const updateInventoryAsset = (id, p) => {
+  stmtUpdateInventoryAsset.run({
+    id,
+    assetTag: p.assetTag || '',
+    barcode: p.barcode || '',
+    serialNumber: p.serialNumber || '',
+    description: p.description || '',
+    department: p.department || '',
+    assignedTo: p.assignedTo || '',
+    purchaseCost: Number(p.purchaseCost || 0),
+    stockQuantity: Math.max(0, Number(p.stockQuantity || 1)),
+    purchaseDate: p.purchaseDate || '',
+    brand: p.brand || '',
+    model: p.model || '',
+    fiscalClass: p.fiscalClass || 'processamento_dados',
+    depreciationRate: Number(p.depreciationRate || 20),
+    supplierId: p.supplierId || null,
+    status: p.status || 'em_uso',
+    notes: p.notes || '',
+  });
+  return getInventoryAsset(id);
+};
+const deleteInventoryAsset = (id) => stmtDeleteInventoryAsset.run(id);
+
 // ─── Full State ───
 const getFullState = () => ({
   items: getAllItems(),
@@ -142,6 +230,9 @@ const getFullState = () => ({
   suppliers: getAllSuppliers(),
   cycle: getCycle(),
   settings: getSettings(),
+  maintenanceAssets: getAllAssets(),
+  maintenanceRecords: getAllRecords(),
+  inventoryAssets: getAllInventoryAssets(),
 });
 
 // ─── Migração do localStorage ───
@@ -281,5 +372,8 @@ module.exports = {
   getCycle, updateCycle: updateCycleQ,
   getSettings, updateSettings: updateSettingsQ,
   getFullState, migrateFromLocalStorage, batchImportReceipt,
+  getAllAssets, getAsset, insertAsset, updateAsset, deleteAsset,
+  getAllRecords, insertRecord, deleteRecord,
+  getAllInventoryAssets, getInventoryAsset, insertInventoryAsset, updateInventoryAsset, deleteInventoryAsset,
   RECEIPTS_DIR,
 };

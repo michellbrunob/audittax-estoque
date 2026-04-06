@@ -6,3 +6,5 @@ dist/
 Thumbs.db
 .env
 backend/.env
+
+.claude/
