@@ -144,4 +144,3 @@ Fluxos suportados hoje:
 
 - O projeto foi estruturado para operacao local e uso pratico em ambiente interno.
 - O backend contem dependencias especificas para OCR e processamento de PDF.
-- A pasta `.claude/` foi mantida fora do versionamento por ser metadado de ferramenta, nao parte do produto.
