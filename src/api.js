@@ -42,8 +42,9 @@ const api = {
     if (file) fd.append('file', file);
     return fetch(`${API_BASE}/api/receipts`, { method: 'POST', body: fd }).then((r) => r.json());
   },
-  deleteReceipt: (id) => json('DELETE', `/api/receipts/${id}`),
+  deleteReceipt: (id, mode = 'receipt-only') => json('DELETE', `/api/receipts/${id}?mode=${encodeURIComponent(mode)}`),
   receiptFileUrl: (id) => `${API_BASE}/api/receipts/${id}/file`,
+  receiptAttachmentUrl: (receiptId, fileId) => `${API_BASE}/api/receipts/${receiptId}/files/${fileId}`,
 
   // Suppliers
   addSupplier: (p) => json('POST', '/api/suppliers', p),

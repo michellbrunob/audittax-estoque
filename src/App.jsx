@@ -3,6 +3,7 @@ import { createWorker } from 'tesseract.js';
 import QrScanner from 'qr-scanner';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker?url';
+import audittaxLogo from './assets/audittax-logo.jpeg';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 // Chave do localStorage legado; usada apenas na migracao para SQLite
@@ -128,11 +129,7 @@ const normalizeUnit = (raw) => {
   };
   return UNIT_MAP[value] ? value : (aliases[value] || 'un');
 };
-const computeLineTotal = (quantity, unitPrice, unit) => {
-  const normalizedUnit = normalizeUnit(unit);
-  const factor = UNIT_MAP[normalizedUnit]?.factor || 1;
-  return Number((Number(quantity || 0) * factor * Number(unitPrice || 0)).toFixed(2));
-};
+const computeLineTotal = (quantity, unitPrice) => Number((Number(quantity || 0) * Number(unitPrice || 0)).toFixed(2));
 const getUnitOptionsMarkup = () => UNIT_OPTIONS.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>);
 
 const initialState = {
@@ -197,16 +194,142 @@ const hydrateState = (raw) => {
   };
 };
 
-const parseMoneyValue = (raw) => Number(String(raw || '0').replace(/\./g, '').replace(',', '.'));
-const parseQuantityValue = (raw) => Number(String(raw || '1').replace(',', '.'));
-const isReceiptNoise = (line) => /subtotal|desconto|troco|pix|cartao|debito|credito|dinheiro|pagamento|recebido|cnpj|cupom|extrato|caixa|operador|cliente|documento|ie\b|valor pago|senha|nsu/i.test(line);
-const findExistingItem = (name, items) => {
-  const target = slug(name);
-  const exact = items.find((item) => slug(item.name) === target);
-  if (exact) return exact;
-  const partial = items.find((item) => target.includes(slug(item.name)) || slug(item.name).includes(target));
-  return partial || null;
+const parseMoneyValue = (raw) => {
+  const value = String(raw || '').trim().replace(/\s/g, '').replace(/^R\$\s*/, '');
+  if (!value) return 0;
+
+  const hasComma = value.includes(',');
+  const hasDot = value.includes('.');
+
+  if (hasComma && hasDot) {
+    return Number(value.replace(/\./g, '').replace(',', '.')) || 0;
+  }
+
+  if (hasComma) {
+    return Number(value.replace(',', '.')) || 0;
+  }
+
+  return Number(value) || 0;
 };
+const parseQuantityValue = (raw) => Number(String(raw || '1').replace(',', '.'));
+const formatUnitLabel = (unit) => {
+  const normalized = normalizeUnit(unit || 'un');
+  const custom = {
+    un: 'UN',
+    pct: 'PCT',
+    cx: 'CX',
+    fd: 'FD',
+    fr: 'FR',
+    gl: 'GL',
+    rl: 'RL',
+    dz: 'DZ',
+    kg: 'KG',
+    g: 'G',
+    mg: 'MG',
+    l: 'L',
+    ml: 'ML',
+    m: 'M',
+    cm: 'CM',
+  };
+  return custom[normalized] || normalized.toUpperCase();
+};
+const isReceiptNoise = (line) => /subtotal|desconto|troco|pix|cartao|debito|credito|dinheiro|pagamento|recebido|cnpj|cupom|extrato|caixa|operador|cliente|documento|ie\b|valor pago|senha|nsu/i.test(line);
+const ITEM_MATCH_STOPWORDS = new Set(['de', 'da', 'do', 'das', 'dos', 'com', 'sem', 'para', 'uso', 'tradicional', 'original', 'premium', 'plus', 'tipo', 'unidade', 'und', 'un']);
+const ITEM_MATCH_NOISE = [
+  /\b\d+\s*(ml|l|lt|g|kg|gr|un|und|pct|pc|cx|fd|fr|gl|rl|dz|m|cm)\b/gi,
+  /\brefil\b/gi,
+  /\bsache\b/gi,
+  /\bembalagem\b/gi,
+  /\bfrasco\b/gi,
+  /\bgalao\b/gi,
+  /\bcaixa\b/gi,
+  /\bpacote\b/gi,
+];
+
+const normalizeItemNameForMatch = (value) => {
+  let text = slug(value)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  ITEM_MATCH_NOISE.forEach((pattern) => {
+    text = text.replace(pattern, ' ').replace(/\s+/g, ' ').trim();
+  });
+
+  return text;
+};
+
+const tokenizeItemName = (value) => normalizeItemNameForMatch(value)
+  .split(' ')
+  .map((token) => token.trim())
+  .filter((token) => token.length >= 3 && !ITEM_MATCH_STOPWORDS.has(token));
+
+const unitFamily = (unit) => UNIT_MAP[normalizeUnit(unit || 'un')]?.family || 'count';
+
+const scoreItemMatch = (entryName, item) => {
+  const targetNormalized = normalizeItemNameForMatch(entryName);
+  const itemNormalized = normalizeItemNameForMatch(item.name);
+  if (!targetNormalized || !itemNormalized) {
+    return null;
+  }
+
+  if (targetNormalized === itemNormalized) {
+    return { item, score: 1, reason: 'nome exato' };
+  }
+
+  const targetTokens = tokenizeItemName(entryName);
+  const itemTokens = tokenizeItemName(item.name);
+  const sharedTokens = targetTokens.filter((token) => itemTokens.includes(token));
+  const uniqueTokens = new Set([...targetTokens, ...itemTokens]);
+  const tokenCoverage = uniqueTokens.size ? sharedTokens.length / uniqueTokens.size : 0;
+  const containment = targetNormalized.includes(itemNormalized) || itemNormalized.includes(targetNormalized);
+  const prefixBonus = targetTokens[0] && itemTokens[0] && targetTokens[0] === itemTokens[0] ? 0.12 : 0;
+  const sharedBonus = Math.min(0.45, sharedTokens.length * 0.16);
+  const containmentBonus = containment ? 0.18 : 0;
+  const familyBonus = unitFamily(item.unit) ? 0.05 : 0;
+  const score = Math.min(0.99, Number((tokenCoverage * 0.55 + sharedBonus + containmentBonus + prefixBonus + familyBonus).toFixed(3)));
+
+  if (score < 0.38) {
+    return null;
+  }
+
+  return {
+    item,
+    score,
+    reason: sharedTokens.length ? `tokens em comum: ${sharedTokens.join(', ')}` : 'similaridade parcial',
+  };
+};
+
+const findExistingItemMatch = (name, items, preferredUnit = 'un') => {
+  const scored = items
+    .map((item) => {
+      const base = scoreItemMatch(name, item);
+      if (!base) return null;
+      const familyMatches = unitFamily(preferredUnit) === unitFamily(item.unit);
+      const adjustedScore = Math.min(0.99, Number((base.score + (familyMatches ? 0.08 : -0.06)).toFixed(3)));
+      return {
+        ...base,
+        unitMatch: familyMatches,
+        score: adjustedScore,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
+
+  const best = scored[0] || null;
+  if (!best || best.score < 0.45) {
+    return null;
+  }
+
+  const runnerUp = scored[1] || null;
+  if (runnerUp && best.score - runnerUp.score < 0.07 && best.score < 0.78) {
+    return null;
+  }
+
+  return best;
+};
+
+const findExistingItem = (name, items, preferredUnit = 'un') => findExistingItemMatch(name, items, preferredUnit)?.item || null;
 const findExistingSupplier = (name, suppliers) => {
   const target = slug(name);
   if (!target) return null;
@@ -223,7 +346,10 @@ const consolidateDraftItems = (entries, catalogItems = []) => {
     const normalizedPrice = Number(Number(entry.preco_unitario || 0).toFixed(2));
     const key = [slug(entry.nome), normalizedUnit, normalizedPrice].join('|');
     const quantity = Number(entry.quantidade || 0);
-    const matchedItem = entry.matchedItemId ? catalogItems.find((item) => item.id === Number(entry.matchedItemId)) : findExistingItem(entry.item_cadastrado || entry.nome, catalogItems);
+    const matchedItem = entry.matchedItemId
+      ? catalogItems.find((item) => item.id === Number(entry.matchedItemId))
+      : findExistingItem(entry.item_cadastrado || entry.nome, catalogItems, normalizedUnit);
+    const matchMeta = !entry.matchedItemId ? findExistingItemMatch(entry.item_cadastrado || entry.nome, catalogItems, normalizedUnit) : null;
     if (!groups.has(key)) {
       groups.set(key, {
         ...entry,
@@ -234,6 +360,8 @@ const consolidateDraftItems = (entries, catalogItems = []) => {
         item_cadastrado: matchedItem?.name || entry.item_cadastrado || null,
         matchedItemId: matchedItem?.id ? String(matchedItem.id) : (entry.matchedItemId || ''),
         confidence: Number(entry.confidence || 0),
+        matchConfidence: Number(entry.matchConfidence || matchMeta?.score || 0),
+        matchReason: entry.matchReason || matchMeta?.reason || '',
         rawLine: entry.rawLine || '',
         lineCount: 1
       });
@@ -247,6 +375,8 @@ const consolidateDraftItems = (entries, catalogItems = []) => {
     if (!current.item_cadastrado && matchedItem?.name) {
       current.item_cadastrado = matchedItem.name;
       current.matchedItemId = String(matchedItem.id);
+      current.matchConfidence = Number(entry.matchConfidence || matchMeta?.score || current.matchConfidence || 0);
+      current.matchReason = entry.matchReason || matchMeta?.reason || current.matchReason || '';
     }
   });
   return [...groups.values()].map((entry, index) => ({
@@ -255,6 +385,27 @@ const consolidateDraftItems = (entries, catalogItems = []) => {
     rawLine: entry.lineCount > 1 ? ((entry.rawLine || 'Item agrupado') + ' - agrupado de ' + entry.lineCount + ' linha(s)') : entry.rawLine
   }));
 };
+
+const mergePurchaseListDraft = (items, draft = []) => {
+  const draftById = new Map((draft || []).map((entry) => [Number(entry.id), entry]));
+  return sortByName(items).map((item) => {
+    const saved = draftById.get(Number(item.id));
+    return {
+      id: item.id,
+      included: saved?.included ?? true,
+      editQty: saved?.editQty ?? ''
+    };
+  });
+};
+
+const samePurchaseListDraft = (a = [], b = []) => (
+  a.length === b.length
+  && a.every((entry, index) => (
+    Number(entry.id) === Number(b[index]?.id)
+    && entry.included === b[index]?.included
+    && String(entry.editQty ?? '') === String(b[index]?.editQty ?? '')
+  ))
+);
 
 const scoreConfidence = ({ name, quantity, unitPrice, rawLine, matchedItem }) => {
   let score = 0.35;
@@ -288,7 +439,8 @@ const extractStructuredLine = (line, items) => {
   }
   name = name.replace(/^[\d\-.\s]+/, '').replace(/\s{2,}/g, ' ').trim();
   if (!name || name.length < 3) return null;
-  const matchedItem = findExistingItem(name, items);
+  const matchMeta = findExistingItemMatch(name, items, unit);
+  const matchedItem = matchMeta?.item || null;
   const confidence = scoreConfidence({ name, quantity, unitPrice, rawLine: clean, matchedItem });
   return {
     nome: name,
@@ -297,6 +449,8 @@ const extractStructuredLine = (line, items) => {
     preco_unitario: unitPrice,
     item_cadastrado: matchedItem?.name || null,
     matchedItemId: matchedItem?.id || '',
+    matchConfidence: Number(matchMeta?.score || 0),
+    matchReason: matchMeta?.reason || '',
     confidence,
     rawLine: clean
   };
@@ -332,6 +486,12 @@ const parseFiscalXml = (xmlText, items) => {
   const rawDate = xmlNodeText(ide || xml, ['dhEmi', 'dEmi']);
   const normalizedDate = rawDate ? rawDate.slice(0, 10) : todayString();
   const market = xmlNodeText(emit || xml, ['xFant', 'xNome']) || 'Emitente nao identificado';
+  const totalProducts = parseMoneyValue(xmlNodeText(totalNode || xml, ['vProd']) || '0');
+  const totalDiscount = parseMoneyValue(xmlNodeText(totalNode || xml, ['vDesc']) || '0');
+  const totalFreight = parseMoneyValue(xmlNodeText(totalNode || xml, ['vFrete']) || '0');
+  const totalOther = parseMoneyValue(xmlNodeText(totalNode || xml, ['vOutro']) || '0');
+  const totalInsurance = parseMoneyValue(xmlNodeText(totalNode || xml, ['vSeg']) || '0');
+  const totalIpi = parseMoneyValue(xmlNodeText(totalNode || xml, ['vIPI']) || '0');
   const total = parseMoneyValue(xmlNodeText(totalNode || xml, ['vNF']) || '0');
   const draftItems = [...xml.getElementsByTagName('det')].map((det, index) => {
     const prod = det.getElementsByTagName('prod')[0] || det;
@@ -339,7 +499,9 @@ const parseFiscalXml = (xmlText, items) => {
     const quantidade = Number((xmlNodeText(prod, ['qCom']) || '0').replace(',', '.'));
     const unidade = normalizeUnit(xmlNodeText(prod, ['uCom']) || 'un');
     const preco = Number((xmlNodeText(prod, ['vUnCom']) || '0').replace(',', '.'));
-    const matchedItem = findExistingItem(nome, items);
+    const totalLinhaXml = parseMoneyValue(xmlNodeText(prod, ['vProd']) || '0');
+    const matchMeta = findExistingItemMatch(nome, items, unidade);
+    const matchedItem = matchMeta?.item || null;
     return {
       id: index + 1,
       include: true,
@@ -347,14 +509,34 @@ const parseFiscalXml = (xmlText, items) => {
       quantidade,
       unidade,
       preco_unitario: preco,
+      total_linha_xml: totalLinhaXml || Number((quantidade * preco).toFixed(2)),
       item_cadastrado: matchedItem?.name || null,
       matchedItemId: matchedItem?.id || '',
+      matchConfidence: Number(matchMeta?.score || 0),
+      matchReason: matchMeta?.reason || '',
       confidence: 0.99,
       rawLine: 'XML fiscal estruturado'
     };
   }).filter((entry) => entry.nome);
   if (!draftItems.length) throw new Error('Nenhum item foi encontrado no XML fiscal.');
-  return { mercado: market, data: normalizedDate, total, accessKey, items: draftItems, sourceMode: 'xml', queryUrl: '' };
+  return {
+    mercado: market,
+    data: normalizedDate,
+    total,
+    totals: {
+      products: totalProducts,
+      discount: totalDiscount,
+      freight: totalFreight,
+      other: totalOther,
+      insurance: totalInsurance,
+      ipi: totalIpi,
+      final: total,
+    },
+    accessKey,
+    items: draftItems,
+    sourceMode: 'xml',
+    queryUrl: '',
+  };
 };
 const extractPdfTextFromFile = async (file) => {
   const buffer = await file.arrayBuffer();
@@ -413,7 +595,8 @@ const parseNativePdfReceiptText = (text, items) => {
       const unidade = m1[4].toLowerCase();
       const precoUnit = Number(m1[5].replace('.', '').replace(',', '.'));
       const totalItem = Number(m1[6].replace('.', '').replace(',', '.'));
-      const matchedItem = findExistingItem(nome, items);
+      const matchMeta = findExistingItemMatch(nome, items, unidade);
+      const matchedItem = matchMeta?.item || null;
       draftItems.push({
         id: draftItems.length + 1,
         include: true,
@@ -423,6 +606,8 @@ const parseNativePdfReceiptText = (text, items) => {
         preco_unitario: precoUnit || (quantidade ? Number((totalItem / quantidade).toFixed(2)) : 0),
         item_cadastrado: matchedItem?.name || null,
         matchedItemId: matchedItem?.id || '',
+        matchConfidence: Number(matchMeta?.score || 0),
+        matchReason: matchMeta?.reason || '',
         confidence: 0.97,
         rawLine: 'PDF - código ' + m1[1]
       });
@@ -440,11 +625,13 @@ const parseNativePdfReceiptText = (text, items) => {
       const totalVal = Number(String(totalLine).replace(',', '.')) || (quantidade * precoUnit);
       const nameLine = (lines[index - 2] || '').replace(/\s*VL\.?\s*Total\s*$/i, '').trim();
       if (nameLine && nameLine.length >= 2) {
-        const matchedItem = findExistingItem(nameLine, items);
+        const matchMeta = findExistingItemMatch(nameLine, items, 'un');
+        const matchedItem = matchMeta?.item || null;
         draftItems.push({
           id: draftItems.length + 1, include: true, nome: nameLine,
           quantidade, unidade: 'un', preco_unitario: precoUnit,
           item_cadastrado: matchedItem?.name || null, matchedItemId: matchedItem?.id || '',
+          matchConfidence: Number(matchMeta?.score || 0), matchReason: matchMeta?.reason || '',
           confidence: 0.97, rawLine: 'PDF SEFAZ-TO - cod ' + code
         });
       }
@@ -461,11 +648,13 @@ const parseNativePdfReceiptText = (text, items) => {
         if (nome.length >= 3) {
           const quantidade = Number(m3[1].replace(',', '.'));
           const precoUnit = Number(m3[2].replace('.', '').replace(',', '.'));
-          const matchedItem = findExistingItem(nome, items);
+          const matchMeta = findExistingItemMatch(nome, items, 'un');
+          const matchedItem = matchMeta?.item || null;
           draftItems.push({
             id: draftItems.length + 1, include: true, nome,
             quantidade, unidade: 'un', preco_unitario: precoUnit,
             item_cadastrado: matchedItem?.name || null, matchedItemId: matchedItem?.id || '',
+            matchConfidence: Number(matchMeta?.score || 0), matchReason: matchMeta?.reason || '',
             confidence: 0.94, rawLine: 'PDF inline'
           });
         }
@@ -843,17 +1032,35 @@ const screens = [
   ['settings', 'Configurações', 'Administracao']
 ];
 
+const createEmptyReaderState = () => ({
+  loading: false,
+  error: '',
+  fileName: '',
+  fileDataUrl: '',
+  fileMimeType: '',
+  companionFileName: '',
+  companionFileMimeType: '',
+  preview: '',
+  parsed: null,
+  draftItems: [],
+  supplierId: '',
+  accessKey: '',
+  queryUrl: ''
+});
+
 function App() {
   const [state, setState] = useState(initialState);
   const [dbReady, setDbReady] = useState(false);
   const [screen, setScreen] = useState('dashboard');
+  const [purchaseListDraft, setPurchaseListDraft] = useState(() => mergePurchaseListDraft(initialState.items));
   const [flash, setFlash] = useState(null);
   const [alertsLastSeen, setAlertsLastSeen] = useState(0);
   const [historyFilter, setHistoryFilter] = useState('');
   const [priceFilter, setPriceFilter] = useState('');
-  const [reader, setReader] = useState({ loading: false, error: '', fileName: '', fileDataUrl: '', fileMimeType: '', preview: '', parsed: null, draftItems: [], supplierId: '', accessKey: '', queryUrl: '' });
+  const [reader, setReader] = useState(createEmptyReaderState);
   const timer = useRef(null);
   const readerFileRef = useRef(null); // guarda File original para upload ao backend
+  const readerAttachmentRef = useRef(null);
 
   // Carga inicial: SQLite para state, com migracao autom?tica do localStorage
   useEffect(() => {
@@ -889,6 +1096,12 @@ function App() {
     });
   }, []);
   useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => {
+    setPurchaseListDraft((current) => {
+      const next = mergePurchaseListDraft(state.items, current);
+      return samePurchaseListDraft(current, next) ? current : next;
+    });
+  }, [state.items]);
 
   const itemsById = useMemo(() => Object.fromEntries(state.items.map((item) => [item.id, item])), [state.items]);
 
@@ -948,7 +1161,10 @@ function App() {
     apiCall(window.__api.addPrice({ ...payload, market }), 'Preco registrado.');
   };
   const addReceipt = (payload, file) => apiCall(window.__api.addReceipt(payload, file), 'Comprovante salvo.');
-  const deleteReceipt = (id) => apiCall(window.__api.deleteReceipt(id), 'Comprovante excluido.');
+  const deleteReceipt = (id, mode = 'receipt-only') => apiCall(
+    window.__api.deleteReceipt(id, mode),
+    mode === 'revert-import' ? 'Importacao revertida e comprovante excluido.' : 'Comprovante excluido.'
+  );
   const addMaintenanceAsset = async (p) => { const r = await window.__api.addMaintenanceAsset(p); setState((s) => ({ ...s, maintenanceAssets: [...s.maintenanceAssets, r].sort((a,b) => a.name.localeCompare(b.name)) })); };
   const updateMaintenanceAsset = async (id, p) => { const r = await window.__api.updateMaintenanceAsset(id, p); setState((s) => ({ ...s, maintenanceAssets: s.maintenanceAssets.map((a) => a.id === id ? r : a) })); };
   const deleteMaintenanceAsset = async (id) => { await window.__api.deleteMaintenanceAsset(id); setState((s) => ({ ...s, maintenanceAssets: s.maintenanceAssets.filter((a) => a.id !== id) })); };
@@ -989,13 +1205,13 @@ function App() {
     const lowerName = file.name.toLowerCase();
     const isXml = file.type.includes('xml') || lowerName.endsWith('.xml');
     const fileMimeType = file.type || (lowerName.endsWith('.pdf') ? 'application/pdf' : isXml ? 'application/xml' : 'image/*');
-    setReader({ loading: true, error: '', fileName: file.name, fileDataUrl: '', fileMimeType: '', preview: '', parsed: null, draftItems: [], supplierId: '', accessKey: '', queryUrl: '' });
+    setReader((current) => ({ ...createEmptyReaderState(), companionFileName: current.companionFileName || '', companionFileMimeType: current.companionFileMimeType || '', loading: true, fileName: file.name, fileDataUrl: '', fileMimeType: '' }));
     let worker;
     try {
       fileDataUrl = String(await fileToDataUrl(file));
       if (isXml) {
         const parsed = parseFiscalXml(await readFileAsText(file), state.items);
-        setReader({ loading: false, error: '', fileName: file.name, fileDataUrl, fileMimeType, preview: '', parsed, draftItems: parsed.items || [], supplierId: '', accessKey: parsed.accessKey || '', queryUrl: parsed.queryUrl || '' });
+        setReader((current) => ({ ...current, loading: false, error: '', fileName: file.name, fileDataUrl, fileMimeType, preview: '', parsed, draftItems: parsed.items || [], supplierId: '', accessKey: parsed.accessKey || '', queryUrl: parsed.queryUrl || '' }));
         showFlash('XML fiscal importado com sucesso.');
         return;
       }
@@ -1010,7 +1226,7 @@ function App() {
           const parsedPdf = { ...backendPdfResult.parsedReceipt, sourceMode: 'pdf-texto' };
           const draftItems = consolidateDraftItems(parsedPdf.items, state.items);
           const supplierMatch = findExistingSupplier(parsedPdf.mercado, state.suppliers);
-          setReader({ loading: false, error: '', fileName: file.name, fileDataUrl, fileMimeType, preview: '', parsed: { ...parsedPdf, items: draftItems }, draftItems, supplierId: supplierMatch?.id ? String(supplierMatch.id) : '', accessKey: parsedPdf.accessKey || backendPdfResult.chaveAcesso || '', queryUrl: parsedPdf.queryUrl || '' });
+          setReader((current) => ({ ...current, loading: false, error: '', fileName: file.name, fileDataUrl, fileMimeType, preview: '', parsed: { ...parsedPdf, items: draftItems }, draftItems, supplierId: supplierMatch?.id ? String(supplierMatch.id) : '', accessKey: parsedPdf.accessKey || backendPdfResult.chaveAcesso || '', queryUrl: parsedPdf.queryUrl || '' }));
           showFlash(parsedPdf.accessKey ? 'PDF textual importado com chave e itens.' : 'PDF textual importado. Confira a chave antes de importar.', parsedPdf.accessKey ? 'success' : 'warn');
           return;
         }
@@ -1024,7 +1240,7 @@ function App() {
         if (parsedPdf.items?.length) {
           const draftItems = consolidateDraftItems(parsedPdf.items, state.items);
           const supplierMatch = findExistingSupplier(parsedPdf.mercado, state.suppliers);
-          setReader({ loading: false, error: '', fileName: file.name, fileDataUrl, fileMimeType, preview: '', parsed: { ...parsedPdf, items: draftItems }, draftItems, supplierId: supplierMatch?.id ? String(supplierMatch.id) : '', accessKey: parsedPdf.accessKey || '', queryUrl: parsedPdf.queryUrl || '' });
+          setReader((current) => ({ ...current, loading: false, error: '', fileName: file.name, fileDataUrl, fileMimeType, preview: '', parsed: { ...parsedPdf, items: draftItems }, draftItems, supplierId: supplierMatch?.id ? String(supplierMatch.id) : '', accessKey: parsedPdf.accessKey || '', queryUrl: parsedPdf.queryUrl || '' }));
           showFlash(parsedPdf.accessKey ? 'PDF textual importado com chave e itens.' : 'PDF textual importado. Confira a chave antes de importar.', parsedPdf.accessKey ? 'success' : 'warn');
           return;
         }
@@ -1080,11 +1296,13 @@ function App() {
         preco_unitario: Number(entry.preco_unitario || 0),
         item_cadastrado: entry.item_cadastrado || null,
         matchedItemId: entry.matchedItemId || '',
+        matchConfidence: Number(entry.matchConfidence || 0),
+        matchReason: entry.matchReason || '',
         confidence: Number(entry.confidence || 0.3),
         rawLine: entry.rawLine || ''
       }));
       if (!draftItems.length) throw new Error('Nao foi possivel identificar itens com confianca. Tente uma foto mais nitida, reta e com melhor iluminacao.');
-      setReader({ loading: false, error: '', fileName: file.name, fileDataUrl, fileMimeType, preview: previewDataUrl, parsed, draftItems, supplierId: '', accessKey: parsed.accessKey || '', queryUrl: parsed.queryUrl || '' });
+      setReader((current) => ({ ...current, loading: false, error: '', fileName: file.name, fileDataUrl, fileMimeType, preview: previewDataUrl, parsed, draftItems, supplierId: '', accessKey: parsed.accessKey || '', queryUrl: parsed.queryUrl || '' }));
       showFlash(parsed.accessKey ? ('Chave sugerida via ' + (parsed.accessKeySource || 'OCR local') + (parsed.accessKeyValid ? '.' : ' (confira antes de importar).')) : (backendWarning || 'Comprovante lido, mas a chave precisa de conferencia manual.'), parsed.accessKey ? (parsed.accessKeyValid ? 'success' : 'warn') : 'error');
     } catch (error) {
       setReader((current) => ({ ...current, loading: false, error: error.message || 'Falha ao processar comprovante.', parsed: null, draftItems: [] }));
@@ -1133,7 +1351,8 @@ function App() {
     // Envia ao backend com arquivo
     const fd = new FormData();
     fd.append('data', JSON.stringify(payload));
-    if (readerFileRef.current) fd.append('file', readerFileRef.current);
+    if (readerFileRef.current) fd.append('primaryFile', readerFileRef.current);
+    if (readerAttachmentRef.current) fd.append('attachmentFile', readerAttachmentRef.current);
 
     const API_BASE = window.__api ? `http://${window.location.hostname}:3333` : 'http://127.0.0.1:3333';
     fetch(`${API_BASE}/api/import-receipt`, { method: 'POST', body: fd })
@@ -1144,8 +1363,9 @@ function App() {
       })
       .catch((e) => showFlash(e?.message || 'Erro ao importar.', 'error'));
 
-    setReader({ loading: false, error: '', fileName: '', fileDataUrl: '', fileMimeType: '', preview: '', parsed: null, draftItems: [], supplierId: '', accessKey: '', queryUrl: '' });
+    setReader(createEmptyReaderState());
     readerFileRef.current = null;
+    readerAttachmentRef.current = null;
   };
 
   const cycleProgress = Math.max(0, Math.min(100, (diffDays(new Date(), new Date(`${state.cycle.lastPurchaseDate}T00:00:00`)) / Number(state.cycle.intervalDays || 1)) * 100));
@@ -1154,11 +1374,11 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><span className="brand-kicker">Reserva Fiscal</span><h1>Controle de Limpeza</h1><p className="brand-subtitle">Inteligencia tributaria aplicada a operacao interna</p></div>
+        <div className="brand"><div className="brand-lockup"><div className="brand-logo-shell"><img src={audittaxLogo} alt="Audittax Gestão Integrada" className="brand-logo" /></div><div><span className="brand-kicker">Audittax</span><h1>Gestão Integrada</h1><p className="brand-subtitle">Operação, estoque, patrimônio e manutenção em uma gestão interna unificada.</p></div></div></div>
         {groups.map((group) => <div className="nav-group" key={group}><span className="nav-label">{group}</span>{screens.filter((screenItem) => screenItem[2] === group).map(([id, label]) => <button key={id} className={`nav-item ${screen === id ? 'active' : ''}`} onClick={() => { setScreen(id); if (id === 'dashboard') setAlertsLastSeen(lowStockItems.length); }}><span>{label}</span>{id === 'dashboard' && lowStockItems.length > alertsLastSeen ? <span className="nav-pill">{lowStockItems.length}</span> : null}{id === 'maintenance' && maintOverdue > 0 ? <span className="nav-pill">{maintOverdue}</span> : null}</button>)}</div>)}
       </aside>
       <main className="main">
-        <header className="topbar"><div><p className="eyebrow">Reserva Fiscal - Setor de limpeza</p><h2>{screens.find((screenItem) => screenItem[0] === screen)?.[1]}</h2>{screen === 'dashboard' ? <p className="subtle">{state.items.length} itens cadastrados, próxima compra em {formatDate(safeIsoDate(nextPurchaseDate))}</p> : null}</div>{flash ? <div className={`flash ${flash.tone}`}>{flash.message}</div> : null}</header>
+        <header className="topbar"><div><p className="eyebrow">Audittax Gestão Integrada</p><h2>{screens.find((screenItem) => screenItem[0] === screen)?.[1]}</h2>{screen === 'dashboard' ? <p className="subtle">{state.items.length} itens cadastrados, próxima compra em {formatDate(safeIsoDate(nextPurchaseDate))}</p> : <p className="subtle">Plataforma integrada para estoque administrativo, limpeza, TI e manutenção predial.</p>}</div>{flash ? <div className={`flash ${flash.tone}`}>{flash.message}</div> : null}</header>
 
         {screen === 'dashboard' ? <><div className="metrics"><MetricCard label="Itens ativos" value={state.items.length} /><MetricCard label="Abaixo do minimo" value={lowStockItems.length} tone={lowStockItems.length ? 'danger' : 'success'} /><MetricCard label="Nao chegam ate a compra" value={vulnerableItems.length} tone={vulnerableItems.length ? 'warn' : 'success'} /><MetricCard label="Custo extra no ciclo" value={currency(state.extraPurchases.reduce((sum, entry) => sum + entry.cost, 0))} tone="warn" /></div><div className="panel-grid"><section className="panel"><div className="panel-head"><div><h3>Alertas automaticos</h3><p>Compra geral prevista para {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><Badge tone={daysUntilNextPurchase <= 7 ? 'danger' : 'info'}>{daysUntilNextPurchase} dias restantes</Badge></div>{!lowStockItems.length && !vulnerableItems.length ? <EmptyState text="Nenhum alerta no momento." /> : <div className="stack">{lowStockItems.map((item) => <AlertCard key={`low-${item.id}`} tone="danger" title={`${item.name} abaixo do estoque minimo`} text={`Atual ${item.quantity} ${item.unit}. Minimo ${item.minStock} ${item.unit}.`} />)}{vulnerableItems.map((item) => <AlertCard key={`vul-${item.id}`} tone="warn" title={`${item.name} nao chega ate a próxima compra`} text={`Duracao estimada: ${durationForItem(item)} dias.`} />)}</div>}</section><section className="panel"><div className="panel-head"><div><h3>Últimas movimentações</h3><p>Entradas, saidas e reposições avulsas</p></div></div><div className="stack">{[...state.movements].slice(-6).reverse().map((entry) => <div className="history-row" key={entry.id}><span className={`dot ${entry.type}`}></span><div className="history-main"><strong>{entry.type === 'entrada' ? '+' : '-'}{entry.quantity}</strong> {itemsById[entry.itemId]?.name || 'Item removido'} <span className="sub-note">{entry.notes}</span></div><span className="mono">{formatDate(entry.date)}</span></div>)}</div></section></div></> : null}
 
@@ -1167,14 +1387,14 @@ function App() {
         {screen === 'timeline' ? <section className="panel"><div className="panel-head"><div><h3>Linha do tempo cronológica</h3><p>Esgotamentos projetados, reposições avulsas e compra geral</p></div></div><div className="timeline">{state.items.map((item) => ({ id: `item-${item.id}`, date: addDays(todayString(), Number.isFinite(durationForItem(item)) ? durationForItem(item) : 3650).toISOString().split('T')[0], tone: durationForItem(item) <= 7 ? 'danger' : durationForItem(item) <= daysUntilNextPurchase ? 'warn' : 'success', title: `${item.name} deve acabar`, subtitle: `${item.quantity} ${item.unit} em estoque, consumo ${item.weeklyConsumption} ${item.unit}/semana` })).concat(state.extraPurchases.map((entry) => ({ id: `extra-${entry.id}`, date: entry.date, tone: 'info', title: `Reposição avulsa de ${itemsById[entry.itemId]?.name || 'Item removido'}`, subtitle: `${entry.quantity} ${itemsById[entry.itemId]?.unit || ''} em ${suppliersById[entry.supplierId]?.name || entry.location || 'local nao informado'} por ${currency(entry.cost)}` }))).concat([{ id: 'cycle', date: safeIsoDate(nextPurchaseDate), tone: 'neutral', title: 'Próxima compra geral', subtitle: `Ciclo fixo de ${state.cycle.intervalDays} dias` }]).sort((a, b) => new Date(`${a.date}T00:00:00`) - new Date(`${b.date}T00:00:00`)).map((event) => <div className="timeline-item" key={event.id}><span className={`timeline-dot ${event.tone}`}></span><div><span className="mono">{formatDate(event.date)}</span><h4>{event.title}</h4><p>{event.subtitle}</p></div></div>)}</div></section> : null}
 
         {screen === 'items' ? <ItemsPanel items={state.items} movements={state.movements} priceHistory={state.priceHistory} onAdd={addItem} onUpdate={updateItem} onDelete={deleteItem} /> : null}
-        {screen === 'entry' ? <><MovementForm title="Registrar entrada manual" items={state.items} onSubmit={(payload) => registerMovement({ ...payload, type: 'entrada' })} /><ReaderPanel state={reader} items={state.items} suppliers={state.suppliers} onAnalyze={analyzeReceipt} onConfirm={confirmReaderImport} onDraftChange={(draftItems) => setReader((current) => ({ ...current, draftItems }))} onSupplierChange={(supplierId) => setReader((current) => ({ ...current, supplierId }))} onAccessKeyChange={(accessKey) => setReader((current) => ({ ...current, accessKey }))} onAddSupplier={(payload) => { addSupplier(payload); setReader((current) => ({ ...current, _pendingSupplierName: payload.name })); }} onReset={() => setReader({ loading: false, error: '', fileName: '', fileDataUrl: '', fileMimeType: '', preview: '', parsed: null, draftItems: [], supplierId: '', accessKey: '' })} /></> : null}
+        {screen === 'entry' ? <><MovementForm title="Registrar entrada manual" items={state.items} onSubmit={(payload) => registerMovement({ ...payload, type: 'entrada' })} /><ReaderPanel state={reader} items={state.items} suppliers={state.suppliers} onAnalyze={analyzeReceipt} onConfirm={confirmReaderImport} onDraftChange={(draftItems) => setReader((current) => ({ ...current, draftItems }))} onSupplierChange={(supplierId) => setReader((current) => ({ ...current, supplierId }))} onAccessKeyChange={(accessKey) => setReader((current) => ({ ...current, accessKey }))} onAttachmentChange={(file) => { readerAttachmentRef.current = file; setReader((current) => ({ ...current, companionFileName: file?.name || '', companionFileMimeType: file?.type || '' })); }} onAddSupplier={(payload) => { addSupplier(payload); setReader((current) => ({ ...current, _pendingSupplierName: payload.name })); }} onReset={() => { setReader(createEmptyReaderState()); readerFileRef.current = null; readerAttachmentRef.current = null; }} /></> : null}
         {screen === 'output' ? <MovementForm title="Registrar saida" items={state.items} onSubmit={(payload) => registerMovement({ ...payload, type: 'saida' })} /> : null}
         {screen === 'extra' ? <ExtraForm items={state.items} entries={state.extraPurchases} onSubmit={registerExtra} itemsById={itemsById} suppliers={state.suppliers} suppliersById={suppliersById} /> : null}
         {screen === 'history' ? <section className="panel"><div className="panel-head"><div><h3>Histórico completo</h3><p>Movimentacoes filtraveis por item</p></div><select value={historyFilter} onChange={(event) => setHistoryFilter(event.target.value)}><option value="">Todos os itens</option>{state.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="stack">{[...state.movements].reverse().filter((entry) => !historyFilter || String(entry.itemId) === historyFilter).map((entry) => <div className="history-row" key={entry.id}><span className={`dot ${entry.type}`}></span><div className="history-main"><strong>{entry.type === 'entrada' ? '+' : '-'}{entry.quantity} {itemsById[entry.itemId]?.unit || ''}</strong> {itemsById[entry.itemId]?.name || 'Item removido'} <span className="sub-note">{entry.notes}</span></div><span className="mono">{formatDate(entry.date)}</span></div>)}</div></section> : null}
 
         {screen === 'prices' ? <PricesPanel items={!priceFilter ? state.items : state.items.filter((item) => String(item.id) === priceFilter)} allItems={state.items} suppliers={state.suppliers} suppliersById={suppliersById} priceMap={priceMap} filter={priceFilter} onFilterChange={setPriceFilter} onSubmit={addPrice} /> : null}
         {screen === 'duration' ? <section><section className="panel"><div className="panel-head"><div><h3>Estimativa de duração</h3><p>Baseada no consumo semanal configurado</p></div></div>{vulnerableItems.length ? <div className="stack">{vulnerableItems.map((item) => <AlertCard key={item.id} tone="warn" title={`${item.name} nao chega ate a próxima compra`} text={`Duracao estimada de ${durationForItem(item)} dias.`} />)}</div> : <EmptyState text="Todos os itens configurados aguentam ate a próxima compra." />}</section><section className="panel"><div className="stack">{state.items.map((item) => { const days = durationForItem(item); const tone = days <= 7 ? 'danger' : days <= 21 ? 'warn' : 'success'; const width = Number.isFinite(days) ? Math.min(100, (days / 60) * 100) : 100; return <div className="duration-card" key={item.id}><div className="panel-head"><div><h3>{item.name}</h3><p>{item.quantity} {item.unit} em estoque, {item.weeklyConsumption || 0} {item.unit}/semana</p></div><Badge tone={tone}>{Number.isFinite(days) ? `${days} dias` : 'Sem consumo configurado'}</Badge></div><div className="progress duration"><span className={tone} style={{ width: `${width}%` }}></span></div></div>; })}</div></section></section> : null}
-        {screen === 'reports' ? <ReportsPanel items={state.items} lowStockItems={lowStockItems} vulnerableItems={vulnerableItems} durationForItem={durationForItem} daysUntilNextPurchase={daysUntilNextPurchase} nextPurchaseDate={nextPurchaseDate} cycle={state.cycle} priceMap={priceMap} suppliersById={suppliersById} /> : null}
+        {screen === 'reports' ? <ReportsPanel items={state.items} lowStockItems={lowStockItems} vulnerableItems={vulnerableItems} durationForItem={durationForItem} daysUntilNextPurchase={daysUntilNextPurchase} nextPurchaseDate={nextPurchaseDate} cycle={state.cycle} priceMap={priceMap} suppliersById={suppliersById} purchaseListDraft={purchaseListDraft} onPurchaseListDraftChange={setPurchaseListDraft} /> : null}
         {screen === 'consumption' ? <ConsumptionPanel items={state.items} /> : null}
         {screen === 'maintenance' ? <MaintenancePanel assets={state.maintenanceAssets} records={state.maintenanceRecords} suppliers={state.suppliers} onAddAsset={addMaintenanceAsset} onUpdateAsset={updateMaintenanceAsset} onDeleteAsset={deleteMaintenanceAsset} onAddRecord={addMaintenanceRecord} onDeleteRecord={deleteMaintenanceRecord} /> : null}
         {screen === 'inventory' ? <InventoryPanel assets={state.inventoryAssets} suppliers={state.suppliers} onAddAsset={addInventoryAsset} onUpdateAsset={updateInventoryAsset} onDeleteAsset={deleteInventoryAsset} /> : null}
@@ -1346,13 +1566,33 @@ function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete 
   </>;
 }
 
-function ReaderPanel({ state, items, suppliers, onAnalyze, onConfirm, onDraftChange, onSupplierChange, onAccessKeyChange, onAddSupplier, onReset }) {
+function ReaderPanel({ state, items, suppliers, onAnalyze, onConfirm, onDraftChange, onSupplierChange, onAccessKeyChange, onAttachmentChange, onAddSupplier, onReset }) {
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [confirmImportOpen, setConfirmImportOpen] = useState(false);
   const updateDraftItem = (id, field, value) => {
     const next = (state.draftItems || []).map((entry) => {
       if (entry.id !== id) return entry;
       if (field === 'matchedItemId') {
         const matched = items.find((item) => item.id === Number(value));
-        return { ...entry, matchedItemId: value, item_cadastrado: matched ? matched.name : null };
+        const autoMatch = !value ? findExistingItemMatch(entry.nome, items, entry.unidade) : null;
+        return {
+          ...entry,
+          matchedItemId: value,
+          item_cadastrado: matched ? matched.name : null,
+          matchConfidence: matched ? 1 : Number(autoMatch?.score || 0),
+          matchReason: matched ? 'selecionado manualmente' : (autoMatch?.reason || ''),
+        };
+      }
+      if ((field === 'nome' || field === 'unidade') && !entry.matchedItemId) {
+        const nextEntry = { ...entry, [field]: value };
+        const autoMatch = findExistingItemMatch(nextEntry.nome, items, nextEntry.unidade);
+        return {
+          ...nextEntry,
+          item_cadastrado: autoMatch?.item?.name || null,
+          matchedItemId: autoMatch?.item?.id ? String(autoMatch.item.id) : '',
+          matchConfidence: Number(autoMatch?.score || 0),
+          matchReason: autoMatch?.reason || '',
+        };
       }
       return { ...entry, [field]: value };
     });
@@ -1361,11 +1601,218 @@ function ReaderPanel({ state, items, suppliers, onAnalyze, onConfirm, onDraftCha
   const removeDraftItem = (id) => onDraftChange((state.draftItems || []).filter((entry) => entry.id !== id));
   const importItems = (state.draftItems || []).filter((entry) => entry.include && entry.nome);
   const importCount = importItems.length;
-  const importTotal = importItems.reduce((sum, entry) => sum + computeLineTotal(entry.quantidade, entry.preco_unitario, entry.unidade), 0);
+  const importProductsTotal = importItems.reduce((sum, entry) => sum + Number(entry.total_linha_xml || computeLineTotal(entry.quantidade, entry.preco_unitario)), 0);
   const receiptTotal = Number(state.parsed?.total || 0);
-  const totalDiff = receiptTotal ? Math.abs(receiptTotal - importTotal) : 0;
+  const xmlProductsTotal = Number(state.parsed?.totals?.products || 0);
+  const xmlDiscountTotal = Number(state.parsed?.totals?.discount || 0);
+  const xmlFreightTotal = Number(state.parsed?.totals?.freight || 0);
+  const xmlOtherTotal = Number(state.parsed?.totals?.other || 0);
+  const xmlInsuranceTotal = Number(state.parsed?.totals?.insurance || 0);
+  const xmlIpiTotal = Number(state.parsed?.totals?.ipi || 0);
+  const productsReferenceTotal = xmlProductsTotal || importProductsTotal;
+  const totalDiff = productsReferenceTotal ? Math.abs(productsReferenceTotal - importProductsTotal) : 0;
+  const finalDocumentDiff = receiptTotal ? Math.abs(receiptTotal - importProductsTotal) : 0;
+  const xmlNetAdjustments = Number((xmlFreightTotal + xmlInsuranceTotal + xmlIpiTotal + xmlOtherTotal - xmlDiscountTotal).toFixed(2));
+  const diffTone = totalDiff <= 0.5 ? 'success' : totalDiff <= 5 ? 'warn' : 'danger';
   const modeLabel = state.parsed?.sourceMode === 'xml' ? 'XML fiscal' : state.parsed?.sourceMode === 'pdf-texto' ? 'PDF texto' : 'OCR de cupom';
-  return <><section className="panel"><div className="panel-head"><div><h3>Entrada por XML, chave ou comprovante</h3><p>Use XML fiscal quando tiver o arquivo da NFC-e/NF-e. Para foto ou PDF, o sistema usa OCR como contingencia.</p></div></div><div className="actions-row" style={{ marginBottom: '12px' }}><button className="primary-button" type="button" onClick={() => window.open(TO_NFCE_CONSULT_URL, '_blank', 'noopener,noreferrer')} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>Consultar NF-e na SEFAZ-TO</button></div><label className={`dropzone ${state.loading ? 'loading' : ''}`}><input type="file" accept="image/*,.pdf,application/pdf,.xml,text/xml,application/xml" onChange={(event) => { const file = event.target.files?.[0]; if (file) onAnalyze(file); }} /><strong>{state.loading ? 'Processando documento fiscal...' : 'Selecionar XML, imagem ou PDF'}</strong><p>{state.fileName || 'XML fiscal e a opcao mais precisa. Imagem/PDF usa OCR.'}</p></label>{state.preview || state.draftItems?.length || state.fileName ? <div className="actions-row" style={{ marginTop: '10px', justifyContent: 'flex-end' }}><button className="ghost-button" type="button" onClick={onReset}>Limpar leitura</button></div> : null}{state.error ? <p className="error-text">{state.error}</p> : null}{state.preview ? <div className="preview-shell"><img className="preview" src={state.preview} alt="Preview do comprovante" /></div> : null}</section>{state.parsed ? <section className="panel"><div className="panel-head"><div><h3>Conferencia da entrada</h3><p>{state.parsed.mercado || 'Emitente nao identificado'} em {formatDate(state.parsed.data || todayString())} - origem {modeLabel}. Revise antes de importar.</p></div><div className="reader-summary"><Badge tone={state.parsed?.sourceMode === 'xml' ? 'success' : 'info'}>{modeLabel}</Badge><Badge tone="info">{importCount} item(ns)</Badge><Badge tone="neutral">Soma dos itens {currency(importTotal)}</Badge>{receiptTotal ? <Badge tone={totalDiff <= 0.5 ? 'success' : 'warn'}>Total do documento {currency(receiptTotal)}</Badge> : null}<button className="primary-button" onClick={onConfirm}>Importar entrada</button></div></div><div className="form-grid" style={{ marginBottom: '14px' }}><Field label="Fornecedor"><select value={state.supplierId || ''} onChange={(event) => onSupplierChange(event.target.value)}><option value="">Fornecedor nao informado</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select>{!state.supplierId && state.parsed?.mercado && state.parsed.mercado !== 'Emitente nao identificado' ? <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}><Badge tone="info">Emitente: {state.parsed.mercado}</Badge><button className="ghost-button" type="button" style={{ fontSize: '12px', padding: '2px 8px' }} onClick={() => { onAddSupplier({ name: state.parsed.mercado, tradeName: '', type: 'mercado', city: '', state: 'TO', cnpj: state.parsed.cnpj || '', notes: 'Cadastrado automaticamente via importacao de NF', active: true }); }}>Cadastrar fornecedor</button></div> : null}</Field><Field label="Chave de acesso"><input value={state.accessKey || state.parsed?.accessKey || ''} onChange={(event) => onAccessKeyChange(event.target.value)} placeholder="Cole ou confirme a chave de acesso" /></Field></div><div className="reader-summary" style={{ marginBottom: '14px' }}>{state.parsed?.accessKeySource ? <Badge tone={state.parsed.accessKeyValid ? (state.parsed.accessKeySource === 'QR Code' ? 'success' : 'warn') : 'danger'}>Chave via {state.parsed.accessKeySource}{state.parsed.accessKeyValid ? '' : ' (nao validada)'}</Badge> : null}{!state.parsed?.accessKeyValid && state.parsed?.accessKeyCandidates?.length ? <Badge tone="neutral">Candidata: {state.parsed.accessKeyCandidates[0]}</Badge> : null}</div><div className="actions-row" style={{ marginBottom: '14px' }}>{state.queryUrl || state.parsed?.queryUrl ? <button className="ghost-button" type="button" onClick={() => window.open(state.queryUrl || state.parsed?.queryUrl, '_blank', 'noopener,noreferrer')}>Abrir consulta da NFC-e</button> : null}<button className="ghost-button" type="button" onClick={() => openToNfcePortalWithKey(state.accessKey || state.parsed?.accessKey || '')}>Consultar por chave na SEFAZ-TO</button></div>{receiptTotal ? <div className="total-audit"><strong>Diferenca entre total do documento e itens:</strong> <span className={totalDiff <= 0.5 ? 'audit-good' : 'audit-warn'}>{currency(totalDiff)}</span></div> : null}<div className="table-wrap"><table><thead><tr><th>Importar</th><th>Item lido</th><th>Vincular a item cadastrado</th><th>Qtd</th><th>Un</th><th>Valor unit.</th><th>Total linha</th><th>Confianca</th><th></th></tr></thead><tbody>{(state.draftItems || []).map((entry) => { const lineTotal = computeLineTotal(entry.quantidade, entry.preco_unitario, entry.unidade); return <tr key={entry.id}><td><input type="checkbox" checked={entry.include} onChange={(event) => updateDraftItem(entry.id, 'include', event.target.checked)} /></td><td><div className="ocr-cell"><input value={entry.nome} onChange={(event) => updateDraftItem(entry.id, 'nome', event.target.value)} />{entry.rawLine ? <small>{entry.rawLine}</small> : null}</div></td><td><select value={entry.matchedItemId || ''} onChange={(event) => updateDraftItem(entry.id, 'matchedItemId', event.target.value)}><option value="">Criar como novo item</option>{sortByName(items).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></td><td><input type="number" min="0" step="0.01" value={entry.quantidade} onChange={(event) => updateDraftItem(entry.id, 'quantidade', Number(event.target.value))} /></td><td><select value={normalizeUnit(entry.unidade || 'un')} onChange={(event) => updateDraftItem(entry.id, 'unidade', event.target.value)}>{UNIT_OPTIONS.map((unit) => <option key={unit.value} value={unit.value}>{unit.value}</option>)}</select></td><td><input type="number" min="0" step="0.01" value={entry.preco_unitario} onChange={(event) => updateDraftItem(entry.id, 'preco_unitario', Number(event.target.value))} /></td><td>{currency(lineTotal)}</td><td><Badge tone={entry.confidence >= 0.95 ? 'success' : entry.confidence >= 0.5 ? 'warn' : 'danger'}>{Math.round(Number(entry.confidence || 0) * 100)}%</Badge></td><td><button className="table-action" onClick={() => removeDraftItem(entry.id)}>Excluir</button></td></tr>; })}</tbody></table></div></section> : null}</>;
+  return <>
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h3>Entrada por XML, chave ou comprovante</h3>
+          <p>Fluxo guiado para importar com mais precisão e arquivar os documentos do lançamento.</p>
+        </div>
+        <div className="actions-row">
+          <button className="primary-button" type="button" onClick={() => setIsUploadModalOpen(true)}>Anexar XML e PDF</button>
+          <button className="ghost-button" type="button" onClick={() => window.open(TO_NFCE_CONSULT_URL, '_blank', 'noopener,noreferrer')}>Consultar NF-e na SEFAZ-TO</button>
+        </div>
+      </div>
+      <div className="alert-card success">
+        <strong>Melhor prática</strong>
+        <p>Use o XML fiscal para importar com precisão e anexe o PDF do comprovante para auditoria. Se não houver XML, o sistema ainda aceita PDF/imagem como contingência.</p>
+      </div>
+      {state.fileName || state.companionFileName ? <div className="reader-summary" style={{ marginTop: '12px' }}>
+        {state.fileName ? <Badge tone={state.fileMimeType?.includes('xml') ? 'success' : 'warn'}>Principal: {state.fileName}</Badge> : null}
+        {state.companionFileName ? <Badge tone="info">Comprovante anexo: {state.companionFileName}</Badge> : null}
+        {state.parsed ? <Badge tone={state.parsed?.sourceMode === 'xml' ? 'success' : 'warn'}>Leitura pronta</Badge> : null}
+      </div> : null}
+      {state.preview ? <div className="preview-shell" style={{ marginTop: '12px' }}><img className="preview" src={state.preview} alt="Preview do comprovante" /></div> : null}
+      {state.preview || state.draftItems?.length || state.fileName || state.companionFileName ? <div className="actions-row" style={{ marginTop: '12px', justifyContent: 'flex-end' }}>
+        <button className="ghost-button" type="button" onClick={onReset}>Limpar leitura</button>
+      </div> : null}
+      {state.error ? <p className="error-text">{state.error}</p> : null}
+    </section>
+
+    {isUploadModalOpen ? <div className="modal-overlay" onClick={() => setIsUploadModalOpen(false)}>
+      <div className="modal-content" style={{ maxWidth: '760px' }} onClick={(event) => event.stopPropagation()}>
+        <div className="panel-head">
+          <div>
+            <h3>Arquivos da entrada</h3>
+            <p>Separe o documento fiscal estruturado do comprovante visual para manter o processo mais confiável.</p>
+          </div>
+          <button className="ghost-button" type="button" onClick={() => setIsUploadModalOpen(false)}>Fechar</button>
+        </div>
+        <div className="form-grid" style={{ marginTop: '1rem' }}>
+          <Field label="1. XML fiscal (preferencial)">
+            <div className="dropzone" style={{ padding: '18px', minHeight: 'auto', borderColor: 'rgba(32, 126, 82, 0.28)', background: '#f4fbf7' }}>
+              <input type="file" accept=".xml,text/xml,application/xml" onChange={(event) => { const file = event.target.files?.[0]; if (file) onAnalyze(file); }} />
+              <strong>{state.fileMimeType?.includes('xml') ? state.fileName : 'Selecionar XML fiscal'}</strong>
+              <p>Obrigatório para a importação mais precisa de itens, quantidades, valores e chave.</p>
+            </div>
+          </Field>
+          <Field label="2. PDF ou imagem do comprovante (recomendado)">
+            <div className="dropzone" style={{ padding: '18px', minHeight: 'auto' }}>
+              <input type="file" accept="image/*,.pdf,application/pdf" onChange={(event) => onAttachmentChange(event.target.files?.[0] || null)} />
+              <strong>{state.companionFileName || 'Selecionar PDF ou imagem do comprovante'}</strong>
+              <p>Fica arquivado no módulo de comprovantes para conferência visual e auditoria.</p>
+            </div>
+          </Field>
+        </div>
+        <div className="alert-card info" style={{ marginTop: '1rem' }}>
+          <strong>Sem XML?</strong>
+          <p>Se você só tiver o comprovante, ainda pode importar usando PDF ou imagem como contingência. Nesse caso, selecione o comprovante como arquivo principal abaixo.</p>
+        </div>
+        <div className="actions-row" style={{ marginTop: '12px' }}>
+          <label className="ghost-button" style={{ cursor: 'pointer' }}>
+            <input type="file" accept="image/*,.pdf,application/pdf" style={{ display: 'none' }} onChange={(event) => { const file = event.target.files?.[0]; if (file) onAnalyze(file); }} />
+            Usar PDF/imagem como principal
+          </label>
+          {state.fileName ? <button className="primary-button" type="button" onClick={() => setIsUploadModalOpen(false)}>Continuar para conferência</button> : <button className="primary-button" type="button" disabled>Selecione um arquivo principal</button>}
+        </div>
+      </div>
+    </div> : null}
+
+    {state.parsed ? <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h3>Conferencia da entrada</h3>
+          <p>{state.parsed.mercado || 'Emitente nao identificado'} em {formatDate(state.parsed.data || todayString())} - origem {modeLabel}. Revise antes de importar.</p>
+        </div>
+        <div className="reader-summary">
+          <Badge tone={state.parsed?.sourceMode === 'xml' ? 'success' : 'info'}>{modeLabel}</Badge>
+          <Badge tone="info">{importCount} item(ns)</Badge>
+          <Badge tone="neutral">Soma dos produtos selecionados {currency(importProductsTotal)}</Badge>
+          {state.companionFileName ? <Badge tone="info">Anexo complementar: {state.companionFileName}</Badge> : null}
+          {receiptTotal ? <Badge tone={diffTone}>Total final da NF/XML {currency(receiptTotal)}</Badge> : null}
+        </div>
+      </div>
+
+      <div className="form-grid" style={{ marginBottom: '14px' }}>
+        <Field label="Fornecedor">
+          <select value={state.supplierId || ''} onChange={(event) => onSupplierChange(event.target.value)}>
+            <option value="">Fornecedor nao informado</option>
+            {suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
+          </select>
+          {!state.supplierId && state.parsed?.mercado && state.parsed.mercado !== 'Emitente nao identificado' ? <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+            <Badge tone="info">Emitente: {state.parsed.mercado}</Badge>
+            <button className="ghost-button" type="button" style={{ fontSize: '12px', padding: '2px 8px' }} onClick={() => {
+              onAddSupplier({ name: state.parsed.mercado, tradeName: '', type: 'mercado', city: '', state: 'TO', cnpj: state.parsed.cnpj || '', notes: 'Cadastrado automaticamente via importacao de NF', active: true });
+            }}>
+              Cadastrar fornecedor
+            </button>
+          </div> : null}
+        </Field>
+        <Field label="Chave de acesso">
+          <input value={state.accessKey || state.parsed?.accessKey || ''} onChange={(event) => onAccessKeyChange(event.target.value)} placeholder="Cole ou confirme a chave de acesso" />
+        </Field>
+      </div>
+
+      <div className="reader-summary" style={{ marginBottom: '14px' }}>
+        {state.parsed?.accessKeySource ? <Badge tone={state.parsed.accessKeyValid ? (state.parsed.accessKeySource === 'QR Code' ? 'success' : 'warn') : 'danger'}>Chave via {state.parsed.accessKeySource}{state.parsed.accessKeyValid ? '' : ' (nao validada)'}</Badge> : null}
+        {!state.parsed?.accessKeyValid && state.parsed?.accessKeyCandidates?.length ? <Badge tone="neutral">Candidata: {state.parsed.accessKeyCandidates[0]}</Badge> : null}
+      </div>
+
+      {receiptTotal ? <div className="total-audit total-audit-card">
+        <div><strong>Total dos produtos no XML:</strong><span>{currency(productsReferenceTotal)}</span></div>
+        <div><strong>Total dos produtos selecionados:</strong><span>{currency(importProductsTotal)}</span></div>
+        <div><strong>Diferenca dos produtos:</strong><span className={totalDiff <= 0.5 ? 'audit-good' : totalDiff <= 5 ? 'audit-warn' : 'audit-bad'}>{currency(totalDiff)}</span></div>
+        <div><strong>Desconto informado na NF:</strong><span className={xmlDiscountTotal > 0 ? 'audit-good' : ''}>{xmlDiscountTotal > 0 ? `- ${currency(xmlDiscountTotal)}` : currency(0)}</span></div>
+        <div><strong>Frete:</strong><span className={xmlFreightTotal > 0 ? 'audit-warn' : ''}>{xmlFreightTotal > 0 ? `+ ${currency(xmlFreightTotal)}` : currency(0)}</span></div>
+        <div><strong>Seguro:</strong><span className={xmlInsuranceTotal > 0 ? 'audit-warn' : ''}>{xmlInsuranceTotal > 0 ? `+ ${currency(xmlInsuranceTotal)}` : currency(0)}</span></div>
+        <div><strong>IPI:</strong><span className={xmlIpiTotal > 0 ? 'audit-warn' : ''}>{xmlIpiTotal > 0 ? `+ ${currency(xmlIpiTotal)}` : currency(0)}</span></div>
+        <div><strong>Outros ajustes:</strong><span className={xmlOtherTotal > 0 ? 'audit-warn' : ''}>{xmlOtherTotal > 0 ? `+ ${currency(xmlOtherTotal)}` : currency(0)}</span></div>
+        <div><strong>Ajuste liquido da NF:</strong><span className={Math.abs(xmlNetAdjustments) <= 0.5 ? 'audit-good' : xmlNetAdjustments < 0 ? 'audit-good' : 'audit-warn'}>{xmlNetAdjustments < 0 ? `- ${currency(Math.abs(xmlNetAdjustments))}` : `+ ${currency(xmlNetAdjustments)}`}</span></div>
+        <div><strong>Total final da NF:</strong><span>{currency(receiptTotal)}</span></div>
+        <div><strong>Diferenca entre total final e itens selecionados:</strong><span className={finalDocumentDiff <= 0.5 ? 'audit-good' : 'audit-warn'}>{currency(finalDocumentDiff)}</span></div>
+        <p>Na maioria dos casos, essa diferença nao e erro: ela costuma ser composta por desconto, frete, seguro, IPI ou outros ajustes fiscais do XML. Para validar a importação dos itens, compare primeiro a diferenca dos produtos; para validar o fechamento da nota, confira a composicao dos ajustes acima.</p>
+      </div> : null}
+
+      <div className="actions-row" style={{ marginBottom: '14px' }}>
+        {state.queryUrl || state.parsed?.queryUrl ? <button className="ghost-button" type="button" onClick={() => window.open(state.queryUrl || state.parsed?.queryUrl, '_blank', 'noopener,noreferrer')}>Abrir consulta da NFC-e</button> : null}
+        <button className="ghost-button" type="button" onClick={() => openToNfcePortalWithKey(state.accessKey || state.parsed?.accessKey || '')}>Consultar por chave na SEFAZ-TO</button>
+      </div>
+
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Importar</th>
+              <th>Item lido</th>
+              <th>Vincular a item cadastrado</th>
+              <th>Qtd</th>
+              <th>Unidade</th>
+              <th>Valor unit.</th>
+              <th>Total linha</th>
+              <th>Confianca</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {(state.draftItems || []).map((entry) => {
+              const lineTotal = Number(entry.total_linha_xml || computeLineTotal(entry.quantidade, entry.preco_unitario));
+              const matchTone = entry.matchedItemId ? (Number(entry.matchConfidence || 0) >= 0.8 ? 'success' : Number(entry.matchConfidence || 0) >= 0.55 ? 'warn' : 'neutral') : 'neutral';
+              return <tr key={entry.id}>
+                <td><input type="checkbox" checked={entry.include} onChange={(event) => updateDraftItem(entry.id, 'include', event.target.checked)} /></td>
+                <td><div className="ocr-cell"><input value={entry.nome} onChange={(event) => updateDraftItem(entry.id, 'nome', event.target.value)} />{entry.rawLine ? <small>{entry.rawLine}</small> : null}</div></td>
+                <td><div className="ocr-cell"><select value={entry.matchedItemId || ''} onChange={(event) => updateDraftItem(entry.id, 'matchedItemId', event.target.value)}><option value="">Criar como novo item</option>{sortByName(items).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{entry.matchedItemId ? <small><Badge tone={matchTone}>Vinculo inteligente {Math.round(Number(entry.matchConfidence || 0) * 100)}%</Badge>{entry.matchReason ? ` - ${entry.matchReason}` : ''}</small> : <small>Nenhum item semelhante foi confirmado com seguranca.</small>}</div></td>
+                <td><input type="number" min="0" step="0.01" value={entry.quantidade} onChange={(event) => updateDraftItem(entry.id, 'quantidade', Number(event.target.value))} /></td>
+                <td><select className="unit-select" value={normalizeUnit(entry.unidade || 'un')} onChange={(event) => updateDraftItem(entry.id, 'unidade', event.target.value)} title={UNIT_MAP[normalizeUnit(entry.unidade || 'un')]?.label || normalizeUnit(entry.unidade || 'un')}>{UNIT_OPTIONS.map((unit) => <option key={unit.value} value={unit.value}>{formatUnitLabel(unit.value)}</option>)}</select></td>
+                <td><input type="number" min="0" step="0.01" value={entry.preco_unitario} onChange={(event) => updateDraftItem(entry.id, 'preco_unitario', Number(event.target.value))} /></td>
+                <td>{currency(lineTotal)}</td>
+                <td><Badge tone={entry.confidence >= 0.95 ? 'success' : entry.confidence >= 0.5 ? 'warn' : 'danger'}>{Math.round(Number(entry.confidence || 0) * 100)}%</Badge></td>
+                <td><button className="table-action" onClick={() => removeDraftItem(entry.id)}>Excluir</button></td>
+              </tr>;
+            })}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan="5">
+                <strong>Resumo da importacao selecionada</strong>
+                <div className="sub-note">Totalizando apenas os itens marcados para importar.</div>
+              </td>
+              <td><strong>{importCount} item(ns)</strong></td>
+              <td><strong>{currency(importProductsTotal)}</strong></td>
+              <td><Badge tone={diffTone}>{currency(totalDiff)}</Badge></td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <div className="alert-card info" style={{ marginTop: '16px' }}>
+        <strong>Finalizar importação</strong>
+        <p>Confira fornecedor, chave, itens, unidades e totais. Quando tudo estiver validado, confirme a entrada da nota fiscal ao final desta revisão.</p>
+      </div>
+
+      <div className="actions-row" style={{ marginTop: '14px', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span className="sub-note">A confirmação vai registrar a entrada no estoque, histórico de preços e comprovantes vinculados.</span>
+        <button className="primary-button" type="button" disabled={!importCount} onClick={() => setConfirmImportOpen(true)}>
+          Confirmar importação
+        </button>
+      </div>
+    </section> : null}
+
+    {confirmImportOpen ? <ConfirmModal
+      title="Confirmar entrada da nota fiscal"
+      message={`Você conferiu os itens, valores, fornecedor e chave da nota fiscal? Ao prosseguir, serão registrados ${importCount} item(ns), a movimentação de estoque e os comprovantes anexados.`}
+      confirmLabel="Prosseguir com a entrada"
+      onConfirm={() => {
+        setConfirmImportOpen(false);
+        onConfirm();
+      }}
+      onCancel={() => setConfirmImportOpen(false)}
+    /> : null}
+  </>;
 }
 
 function PricesPanel({ items, allItems, suppliers, suppliersById, priceMap, filter, onFilterChange, onSubmit }) { const [form, setForm] = useState({ itemId: String(allItems[0]?.id || ''), supplierId: String(suppliers[0]?.id || ''), price: '', date: todayString() }); return <><section className="panel"><div className="panel-head"><div><h3>Histórico de precos</h3><p>Comparativo por item e por fornecedor</p></div><select value={filter} onChange={(event) => onFilterChange(event.target.value)}><option value="">Todos</option>{allItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div><div className="stack">{items.map((item) => { const entries = priceMap[item.id] || []; if (!entries.length) return <div className="entry-card" key={item.id}><div><strong>{item.name}</strong><p>Sem historico de precos.</p></div></div>; const latest = entries.at(-1); const previous = entries.length > 1 ? entries.at(-2) : null; const best = [...entries].sort((a, b) => a.price - b.price)[0]; const variation = previous ? ((latest.price - previous.price) / previous.price) * 100 : null; return <div className="entry-card" key={item.id}><div><strong>{item.name}</strong><p>Ultimo preco: {currency(latest.price)} em {suppliersById[latest.supplierId]?.name || latest.market}</p></div><div className="entry-meta">{variation !== null ? <Badge tone={variation > 0 ? 'warn' : variation < 0 ? 'success' : 'neutral'}>{variation > 0 ? 'Alta' : variation < 0 ? 'Queda' : 'Estavel'} {Math.abs(variation).toFixed(1)}%</Badge> : null}<Badge tone="success">Melhor fornecedor: {suppliersById[best.supplierId]?.name || best.market}</Badge></div></div>; })}</div></section><section className="panel"><div className="panel-head"><div><h3>Adicionar preco manual</h3><p>Entrada complementar alem do leitor automatico</p></div></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSubmit({ itemId: Number(form.itemId), supplierId: Number(form.supplierId), price: Number(form.price), date: form.date }); setForm({ itemId: String(allItems[0]?.id || ''), supplierId: String(suppliers[0]?.id || ''), price: '', date: todayString() }); }}><Field label="Item"><select value={form.itemId} onChange={(event) => setForm({ ...form, itemId: event.target.value })}>{allItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><Field label="Fornecedor"><SearchableSelect items={suppliers} value={form.supplierId} onChange={(val) => setForm({ ...form, supplierId: val })} placeholder="Digite para buscar fornecedor..." /></Field><Field label="Preco unitario"><input type="number" min="0" step="0.01" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} /></Field><Field label="Data"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar preco</button></div></form></section></>; }
@@ -1487,7 +1934,8 @@ const formatMoneyForInput = (value) => {
 function ReceiptsPanel({ receipts, onAdd, onDelete, suppliersById }) {
   const [form, setForm] = useState({ title: '', valueDisplay: '', valueRaw: '', date: todayString(), notes: '', fileName: '', fileDataUrl: '', fileMimeType: '' });
   const [viewingId, setViewingId] = useState(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [viewingAttachment, setViewingAttachment] = useState(null);
+  const [confirmDeleteReceipt, setConfirmDeleteReceipt] = useState(null);
   const MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Marco', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 
   // Agrupar comprovantes por Ano > Mes (mais recente primeiro)
@@ -1505,72 +1953,96 @@ function ReceiptsPanel({ receipts, onAdd, onDelete, suppliersById }) {
   const groups = Object.values(grouped).sort((a, b) => b.year !== a.year ? b.year - a.year : b.month - a.month);
 
   const viewingReceipt = viewingId !== null ? receipts.find((r) => r.id === viewingId) : null;
-  const isPdf = viewingReceipt?.mimeType?.includes('pdf');
-  const isImage = viewingReceipt?.mimeType?.startsWith('image/') || (viewingReceipt?.dataUrl && viewingReceipt.dataUrl.startsWith('data:image/'));
-  const fileUrl = viewingReceipt ? (viewingReceipt.filePath ? (window.__api ? window.__api.receiptFileUrl(viewingReceipt.id) : '') : viewingReceipt.dataUrl || '') : '';
+  const selectedAttachment = viewingAttachment || viewingReceipt?.attachments?.[0] || null;
+  const fileUrl = selectedAttachment ? (selectedAttachment.isPrimary ? (window.__api ? window.__api.receiptFileUrl(viewingReceipt.id) : '') : (window.__api ? window.__api.receiptAttachmentUrl(viewingReceipt.id, selectedAttachment.id) : '')) : (viewingReceipt ? (viewingReceipt.filePath ? (window.__api ? window.__api.receiptFileUrl(viewingReceipt.id) : '') : viewingReceipt.dataUrl || '') : '');
+  const isPdf = selectedAttachment?.mimeType?.includes('pdf') || viewingReceipt?.mimeType?.includes('pdf');
+  const isImage = selectedAttachment?.mimeType?.startsWith('image/') || viewingReceipt?.mimeType?.startsWith('image/') || (viewingReceipt?.dataUrl && viewingReceipt.dataUrl.startsWith('data:image/'));
   const hasFile = Boolean(fileUrl || viewingReceipt?.hasFile || viewingReceipt?.dataUrl || viewingReceipt?.filePath);
 
-  return <>{viewingReceipt && hasFile ? <div className="modal-overlay" onClick={() => setViewingId(null)}><div className="modal-content" onClick={(e) => e.stopPropagation()}><div className="panel-head"><div><h3>{viewingReceipt.title}</h3><p>{formatDate(viewingReceipt.date)} - {currency(viewingReceipt.value)}</p></div><button className="ghost-button" onClick={() => setViewingId(null)}>Fechar</button></div><div className="receipt-viewer">{isPdf ? <iframe src={fileUrl} title="Comprovante PDF" style={{ width: '100%', height: '70vh', border: 'none', borderRadius: '8px' }} /> : isImage ? <img src={fileUrl} alt="Comprovante" style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: '8px' }} /> : <p>Formato nao suportado para visualizacao.</p>}</div><div className="actions-row" style={{ marginTop: '1rem' }}><a className="primary-button" href={fileUrl} download={viewingReceipt.fileName || `comprovante-${viewingReceipt.date}`} style={{ textDecoration: 'none', textAlign: 'center' }}>Baixar arquivo</a><button className="ghost-button" onClick={() => setViewingId(null)}>Fechar</button></div></div></div> : null}
+  return <>{viewingReceipt && hasFile ? <div className="modal-overlay" onClick={() => { setViewingId(null); setViewingAttachment(null); }}><div className="modal-content" onClick={(e) => e.stopPropagation()}><div className="panel-head"><div><h3>{viewingReceipt.title}</h3><p>{formatDate(viewingReceipt.date)} - {currency(viewingReceipt.value)}</p></div><button className="ghost-button" onClick={() => { setViewingId(null); setViewingAttachment(null); }}>Fechar</button></div>{viewingReceipt.attachments?.length ? <div className="actions-row" style={{ marginBottom: '1rem', flexWrap: 'wrap' }}>{viewingReceipt.attachments.map((attachment) => <button key={attachment.id} className={selectedAttachment?.id === attachment.id ? 'primary-button' : 'ghost-button'} type="button" onClick={() => setViewingAttachment(attachment)}>{attachment.label || attachment.fileName}</button>)}</div> : null}<div className="receipt-viewer">{isPdf ? <iframe src={fileUrl} title="Comprovante PDF" style={{ width: '100%', height: '70vh', border: 'none', borderRadius: '8px' }} /> : isImage ? <img src={fileUrl} alt="Comprovante" style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: '8px' }} /> : <p>Formato nao suportado para visualizacao. Use o download para abrir este arquivo.</p>}</div><div className="actions-row" style={{ marginTop: '1rem' }}><a className="primary-button" href={fileUrl} download={selectedAttachment?.fileName || viewingReceipt.fileName || `comprovante-${viewingReceipt.date}`} style={{ textDecoration: 'none', textAlign: 'center' }}>Baixar arquivo</a><button className="ghost-button" onClick={() => { setViewingId(null); setViewingAttachment(null); }}>Fechar</button></div></div></div> : null}
 
   <section className="panel"><div className="panel-head"><div><h3>Comprovantes</h3><p>Cupons fiscais organizados por mes - {receipts.length} registro(s) no total</p></div><Badge tone="info">{currency(receipts.reduce((sum, r) => sum + (Number(r.value) || 0), 0))} total</Badge></div></section>
 
   <section className="panel"><div className="panel-head"><div><h3>Registrar comprovante manual</h3><p>Use quando nao houver importacao pelo modulo de entrada</p></div></div><form className="form-grid" onSubmit={async (event) => { event.preventDefault(); if (!form.title.trim()) return; onAdd({ title: form.title.trim(), value: parseBrlInput(form.valueRaw), date: form.date, importedAt: timestampString(), notes: form.notes, source: 'manual', fileName: form.fileName, mimeType: form.fileMimeType }, form._file || null); setForm({ title: '', valueDisplay: '', valueRaw: '', date: todayString(), notes: '', fileName: '', fileDataUrl: '', fileMimeType: '', _file: null }); }}><Field label="Titulo"><input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Ex: Compra Mercado Central" /></Field><Field label="Valor (R$)"><input inputMode="numeric" value={form.valueDisplay} onChange={(event) => { const raw = event.target.value.replace(/\D/g, ''); setForm({ ...form, valueRaw: raw, valueDisplay: formatBrlInput(raw) }); }} placeholder="R$ 0,00" /></Field><Field label="Data da compra"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></Field><Field label="Arquivo (imagem ou PDF)"><div className="dropzone" style={{ padding: '14px', minHeight: 'auto' }}><input type="file" accept="image/*,.pdf" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; setForm((prev) => ({ ...prev, fileName: file.name, fileMimeType: file.type, _file: file })); }} />{form.fileName ? <span style={{ color: 'var(--success)', fontWeight: 500 }}>{form.fileName}</span> : <span>Selecionar arquivo</span>}</div></Field><Field label="Observacao"><input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar comprovante</button>{form.fileName ? <button className="ghost-button" type="button" onClick={() => setForm((prev) => ({ ...prev, fileName: '', fileDataUrl: '', fileMimeType: '' }))}>Remover arquivo</button> : null}</div></form></section>
 
-  {!groups.length ? <section className="panel"><EmptyState text="Nenhum comprovante registrado ainda. Importe pelo modulo de entrada ou registre manualmente acima." /></section> : groups.map((group) => <section className="panel" key={group.label}><div className="panel-head"><div><h3>{group.label}</h3><p>{group.receipts.length} comprovante(s)</p></div><Badge tone="neutral">{currency(group.total)}</Badge></div><div className="stack">{group.receipts.map((receipt) => <article className="receipt-item" key={receipt.id}><div className="receipt-item-head"><div><strong>{receipt.title}</strong><p>{currency(receipt.value)}{receipt.supplierId ? ` - ${suppliersById[receipt.supplierId]?.name || 'Fornecedor'}` : ''}</p></div><Badge tone={receipt.source === 'entrada-ocr' ? 'info' : receipt.source === 'xml-fiscal' ? 'success' : 'neutral'}>{receipt.source === 'entrada-ocr' ? 'OCR' : receipt.source === 'xml-fiscal' ? 'XML' : receipt.source === 'pdf-texto' ? 'PDF' : 'Manual'}</Badge></div><div className="receipt-meta"><span>Data: {formatDate(receipt.date)}</span><span>Importado em: {receipt.importedAt ? formatDateTime(receipt.importedAt) : '-'}</span>{receipt.fileName ? <span>Arquivo: {receipt.fileName}</span> : null}{receipt.accessKey ? <span>Chave: {receipt.accessKey}</span> : null}</div>{receipt.notes ? <p>{receipt.notes}</p> : null}<div className="actions-row">{(receipt.filePath || receipt.hasFile || receipt.dataUrl) ? <button className="primary-button" type="button" onClick={() => setViewingId(receipt.id)}>Visualizar</button> : null}{(receipt.filePath || receipt.hasFile || receipt.dataUrl) ? <a className="ghost-button" href={receipt.filePath && window.__api ? window.__api.receiptFileUrl(receipt.id) : receipt.dataUrl} download={receipt.fileName || `comprovante-${receipt.date}`} style={{ textDecoration: 'none', textAlign: 'center' }}>Baixar</a> : null}{receipt.queryUrl ? <button className="ghost-button" type="button" onClick={() => window.open(receipt.queryUrl, '_blank', 'noopener,noreferrer')}>Consultar NFC-e</button> : null}<button className="table-action" type="button" onClick={() => setConfirmDeleteId(receipt.id)}>Excluir</button></div></article>)}</div></section>)}
-  {confirmDeleteId !== null && <ConfirmModal title="Excluir comprovante" message="Deseja excluir este comprovante permanentemente? Esta acao nao pode ser desfeita." confirmLabel="Excluir" danger onConfirm={() => { onDelete(confirmDeleteId); setConfirmDeleteId(null); }} onCancel={() => setConfirmDeleteId(null)} />}
+  {!groups.length ? <section className="panel"><EmptyState text="Nenhum comprovante registrado ainda. Importe pelo modulo de entrada ou registre manualmente acima." /></section> : groups.map((group) => <section className="panel" key={group.label}><div className="panel-head"><div><h3>{group.label}</h3><p>{group.receipts.length} comprovante(s)</p></div><Badge tone="neutral">{currency(group.total)}</Badge></div><div className="stack">{group.receipts.map((receipt) => {
+    const importSummary = receipt.importSummary || {};
+    const hasImportedLinks = importSummary.canRevertImport;
+    return <article className="receipt-item" key={receipt.id}><div className="receipt-item-head"><div><strong>{receipt.title}</strong><p>{currency(receipt.value)}{receipt.supplierId ? ` - ${suppliersById[receipt.supplierId]?.name || 'Fornecedor'}` : ''}</p></div><Badge tone={receipt.source === 'entrada-ocr' ? 'info' : receipt.source === 'xml-fiscal' ? 'success' : 'neutral'}>{receipt.source === 'entrada-ocr' ? 'OCR' : receipt.source === 'xml-fiscal' ? 'XML' : receipt.source === 'pdf-texto' ? 'PDF' : 'Manual'}</Badge></div><div className="receipt-meta"><span>Data: {formatDate(receipt.date)}</span><span>Importado em: {receipt.importedAt ? formatDateTime(receipt.importedAt) : '-'}</span>{receipt.fileName ? <span>Arquivo principal: {receipt.fileName}</span> : null}{receipt.attachments?.length > 1 ? <span>Anexos: {receipt.attachments.map((attachment) => attachment.fileName).join(', ')}</span> : null}{receipt.accessKey ? <span>Chave: {receipt.accessKey}</span> : null}{hasImportedLinks ? <span>Importacao vinculada: {importSummary.movementCount || 0} movimento(s), {importSummary.priceCount || 0} preco(s), {importSummary.createdItemCount || 0} item(ns) novo(s)</span> : null}</div>{receipt.notes ? <p>{receipt.notes}</p> : null}<div className="actions-row">{(receipt.filePath || receipt.hasFile || receipt.dataUrl || receipt.attachments?.length) ? <button className="primary-button" type="button" onClick={() => { setViewingId(receipt.id); setViewingAttachment(receipt.attachments?.[0] || null); }}>Visualizar</button> : null}{(receipt.filePath || receipt.hasFile || receipt.dataUrl) ? <a className="ghost-button" href={receipt.filePath && window.__api ? window.__api.receiptFileUrl(receipt.id) : receipt.dataUrl} download={receipt.fileName || `comprovante-${receipt.date}`} style={{ textDecoration: 'none', textAlign: 'center' }}>Baixar principal</a> : null}{receipt.queryUrl ? <button className="ghost-button" type="button" onClick={() => window.open(receipt.queryUrl, '_blank', 'noopener,noreferrer')}>Consultar NFC-e</button> : null}<button className="table-action" type="button" onClick={() => setConfirmDeleteReceipt(receipt)}>Excluir</button></div></article>;
+  })}</div></section>)}
+  {confirmDeleteReceipt !== null ? (() => {
+    const importSummary = confirmDeleteReceipt.importSummary || {};
+    const canRevertImport = importSummary.canRevertImport;
+    if (!canRevertImport) {
+      return <ConfirmModal title="Excluir comprovante" message="Deseja excluir este comprovante permanentemente? Esta acao nao pode ser desfeita." confirmLabel="Excluir" danger onConfirm={() => { onDelete(confirmDeleteReceipt.id, 'receipt-only'); setConfirmDeleteReceipt(null); }} onCancel={() => setConfirmDeleteReceipt(null)} />;
+    }
+
+    return <div className="modal-overlay"><div className="modal-content" style={{ maxWidth: '520px' }}>
+      <div className="panel-head"><div><h3>Excluir comprovante importado</h3><p>Este comprovante criou registros no estoque. Escolha como deseja prosseguir.</p></div></div>
+      <div className="stack" style={{ marginTop: '1rem' }}>
+        <div className="alert-card info">
+          <strong>Importacao vinculada</strong>
+          <p>{importSummary.movementCount || 0} movimento(s), {importSummary.priceCount || 0} preco(s) e {importSummary.createdItemCount || 0} item(ns) novo(s).</p>
+        </div>
+        <button className="ghost-button" type="button" onClick={() => { onDelete(confirmDeleteReceipt.id, 'receipt-only'); setConfirmDeleteReceipt(null); }}>
+          Excluir so o comprovante
+        </button>
+        <button className="primary-button" type="button" style={{ background: '#e67e22' }} onClick={() => { onDelete(confirmDeleteReceipt.id, 'revert-import'); setConfirmDeleteReceipt(null); }}>
+          Reverter importacao e excluir comprovante
+        </button>
+        <p className="subtle">A reversao so sera concluida se o estoque atual ainda suportar desfazer essas entradas. Se os itens ja tiverem sido consumidos, o sistema vai bloquear para evitar saldo incorreto.</p>
+      </div>
+      <div className="actions-row" style={{ marginTop: '1rem' }}>
+        <button className="ghost-button" type="button" onClick={() => setConfirmDeleteReceipt(null)}>Cancelar</button>
+      </div>
+    </div></div>;
+  })() : null}
 </>;
 }
-function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, daysUntilNextPurchase, nextPurchaseDate, cycle, priceMap, suppliersById }) {
-  const buildSuggestions = () => items
-    .filter((item) => {
-      const duration = durationForItem(item);
-      return Number(item.quantity || 0) <= Number(item.minStock || 0) || duration < daysUntilNextPurchase;
-    })
-    .map((item) => {
-      const weekly = Number(item.weeklyConsumption || 0);
-      const current = Number(item.quantity || 0);
-      const minStock = Number(item.minStock || 0);
-      const needed = weekly > 0
-        ? Math.ceil(weekly * (daysUntilNextPurchase / 7) + minStock - current)
-        : Math.max(1, Math.ceil(minStock - current));
-      const suggestedQtyBase = Math.max(1, needed);
+function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, daysUntilNextPurchase, nextPurchaseDate, cycle, priceMap, suppliersById, purchaseListDraft, onPurchaseListDraftChange }) {
+  const editableList = useMemo(() => {
+    const draftById = new Map((purchaseListDraft || []).map((entry) => [Number(entry.id), entry]));
+    return sortByName(items).map((item) => {
+      const saved = draftById.get(Number(item.id));
       const itemPackSize = Number(item.packSize || 1);
       const itemPackUnit = item.packUnit || '';
-      const suggestedPacks = itemPackSize > 1 ? Math.ceil(suggestedQtyBase / itemPackSize) : null;
-      const suggestedQty = suggestedPacks !== null ? suggestedPacks * itemPackSize : suggestedQtyBase;
       const prices = priceMap[item.id] || [];
       const best = [...prices].sort((a, b) => a.price - b.price)[0] || null;
       const bestSupplierName = best ? (suppliersById[best.supplierId]?.name || best.market || null) : null;
-      return { ...item, itemPackSize, itemPackUnit, suggestedQty, suggestedPacks, bestSupplierName, isManual: false, included: true, editQty: suggestedPacks - suggestedQty, isPackMode: !!suggestedPacks };
-    })
-    .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt-BR'));
+      return {
+        ...item,
+        itemPackSize,
+        itemPackUnit,
+        suggestedQty: null,
+        suggestedPacks: null,
+        bestSupplierName,
+        isManual: false,
+        included: saved?.included ?? true,
+        editQty: saved?.editQty ?? '',
+        isPackMode: false
+      };
+    });
+  }, [items, priceMap, purchaseListDraft, suppliersById]);
 
-  const [editableList, setEditableList] = useState(() => buildSuggestions());
-  const [addItemId, setAddItemId] = useState('');
-  const [addQty, setAddQty] = useState(1);
-
-  const listIds = new Set(editableList.map((i) => i.id));
-  const availableToAdd = sortByName(items.filter((i) => !listIds.has(i.id)));
-
-  const updateItem = (id, changes) => setEditableList((prev) => prev.map((i) => i.id === id ? { ...i, ...changes } : i));
-  const removeItem = (id) => setEditableList((prev) => prev.filter((i) => i.id !== id));
-  const resetToSuggestions = () => setEditableList(buildSuggestions());
-
-  const addExtraItem = () => {
-    if (!addItemId) return;
-    const item = items.find((i) => String(i.id) === String(addItemId));
-    if (!item || listIds.has(item.id)) return;
-    const itemPackSize = Number(item.packSize || 1);
-    const itemPackUnit = item.packUnit || '';
-    const isPackMode = itemPackSize > 1 && !!itemPackUnit;
-    const prices = priceMap[item.id] || [];
-    const best = [...prices].sort((a, b) => a.price - b.price)[0] || null;
-    const bestSupplierName = best ? (suppliersById[best.supplierId]?.name || best.market || null) : null;
-    setEditableList((prev) => [...prev, { ...item, itemPackSize, itemPackUnit, suggestedQty: null, suggestedPacks: null, bestSupplierName, isManual: true, included: true, editQty: addQty, isPackMode }]);
-    setAddItemId(''); setAddQty(1);
+  const sanitizePurchaseQty = (value) => {
+    if (value === '') return '';
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return '';
+    return parsed < 0 ? 0 : parsed;
   };
 
-  const getActualQty = (item) => item.isPackMode ? item.editQty * item.itemPackSize : item.editQty;
+  const updateItem = (id, changes) => onPurchaseListDraftChange((prev) => prev.map((i) => i.id === id ? {
+    ...i,
+    ...changes,
+    ...(Object.prototype.hasOwnProperty.call(changes, 'editQty') ? { editQty: sanitizePurchaseQty(changes.editQty) } : {}),
+  } : i));
+  const clearItemQty = (id) => updateItem(id, { editQty: '' });
+  const resetToSuggestions = () => onPurchaseListDraftChange(mergePurchaseListDraft(items));
+
+  const getActualQty = (item) => {
+    const quantity = Number(item.editQty || 0);
+    return item.isPackMode ? quantity * item.itemPackSize : quantity;
+  };
   const getItemCost = (item) => {
     const prices = priceMap[item.id] || [];
     const best = [...prices].sort((a, b) => a.price - b.price)[0] || null;
@@ -1578,6 +2050,70 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
   };
   const selectedItems = editableList.filter((i) => i.included);
   const totalSelected = selectedItems.reduce((sum, i) => sum + getItemCost(i), 0);
+
+  const printPurchaseList = () => {
+    const rows = selectedItems.map((item) => {
+      const actualQty = getActualQty(item);
+      const hasQty = item.editQty !== '' && Number(item.editQty) > 0;
+      const qtyLabel = !hasQty ? '' : item.isPackMode ? `${item.editQty} ${item.itemPackUnit} (${actualQty} ${item.unit})` : `${item.editQty} ${item.unit}`;
+      const supplier = item.bestSupplierName || '-';
+      const cost = getItemCost(item);
+      const notes = [item.brand, item.itemNotes].filter(Boolean).join(' - ');
+      return `
+        <tr>
+          <td>${item.name}</td>
+          <td>${qtyLabel || '&nbsp;'}</td>
+          <td>${supplier}</td>
+          <td>${cost > 0 ? currency(cost) : '-'}</td>
+          <td>${notes || '&nbsp;'}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const printWindow = window.open('', '_blank', 'width=900,height=700');
+    if (!printWindow) return;
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html lang="pt-BR">
+        <head>
+          <meta charset="UTF-8" />
+          <title>Lista de Compra</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
+            h1 { margin: 0 0 6px; font-size: 24px; }
+            p { margin: 0 0 18px; color: #555; font-size: 12px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #cfcfcf; padding: 8px 10px; text-align: left; vertical-align: top; }
+            th { background: #f2f2f2; text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; }
+            .total { margin-top: 16px; text-align: right; font-weight: 700; }
+          </style>
+        </head>
+        <body>
+          <h1>Lista de Compra</h1>
+          <p>Gerado em ${formatDate(todayString())} | Próxima compra: ${formatDate(safeIsoDate(nextPurchaseDate))} | ${selectedItems.length} item(ns)</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Quantidade</th>
+                <th>Fornecedor</th>
+                <th>Custo est.</th>
+                <th>Observações</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows || '<tr><td colspan="5">Nenhum item selecionado para impressão.</td></tr>'}
+            </tbody>
+          </table>
+          ${totalSelected > 0 ? `<div class="total">Total estimado: ${currency(totalSelected)}</div>` : ''}
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  };
 
   const exportCsv = () => {
     const headers = ['Item', 'Unidade', 'Qtd Atual', 'Estoque Minimo', 'Consumo Semanal', 'Duracao (dias)', 'Status'];
@@ -1600,7 +2136,7 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
   return <>
     <div className="report-print-header">
       <h2>Lista de Compra &mdash; {formatDate(todayString())}</h2>
-      <p>Próxima compra: {formatDate(safeIsoDate(nextPurchaseDate))} &bull; {daysUntilNextPurchase} dias restantes &bull; {selectedItems.length} item(ns)</p>
+      <p>Próxima compra: {formatDate(safeIsoDate(nextPurchaseDate))} &bull; {daysUntilNextPurchase} dias restantes &bull; {editableList.length} item(ns)</p>
     </div>
 
     <section className="panel no-print">
@@ -1627,33 +2163,51 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
       <div className="panel-head no-print">
         <div>
           <h3>Lista de compra</h3>
-          <p>{selectedItems.length} item(ns) selecionado(s){totalSelected > 0 ? ` - estimado ${currency(totalSelected)}` : ""}</p>
+          <p>{editableList.length} item(ns) cadastrados na lista{totalSelected > 0 ? ` - estimado ${currency(totalSelected)}` : ""}</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <button className="ghost-button" type="button" onClick={resetToSuggestions}>Restaurar sugestoes</button>
-          <button className="primary-button" type="button" onClick={() => window.print()}>Imprimir lista</button>
+          <button className="ghost-button" type="button" onClick={resetToSuggestions}>Limpar quantidades</button>
+          <button className="primary-button" type="button" onClick={printPurchaseList}>Imprimir lista</button>
         </div>
       </div>
       <div className="report-print-section-title">
-        <h3>Lista de Compra &mdash; {selectedItems.length} item(ns)</h3>
+        <h3>Lista de Compra &mdash; {editableList.length} item(ns)</h3>
         <p>Gerado em {formatDate(todayString())} &bull; Próxima compra: {formatDate(safeIsoDate(nextPurchaseDate))}</p>
       </div>
 
-      {availableToAdd.length > 0 && <div className="no-print" style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginBottom: '16px', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 220px' }}><SearchableSelect items={availableToAdd} value={addItemId} onChange={setAddItemId} placeholder="Adicionar item a lista..." /></div>
-        <input type="number" min="1" step="1" value={addQty} onChange={(e) => setAddQty(Number(e.target.value) || 1)} style={{ width: '80px', padding: '11px 12px', borderRadius: '12px', border: '1px solid var(--line)' }} />
-        <button className="ghost-button" type="button" onClick={addExtraItem} disabled={!addItemId}>+ Adicionar</button>
-      </div>}
+      <div className="table-wrap print-only">
+        <table className="purchase-table">
+          <thead><tr><th>Item</th><th>Quantidade</th><th>Fornecedor</th><th>Custo est.</th></tr></thead>
+          <tbody>{selectedItems.map((item) => {
+            const actualQty = getActualQty(item);
+            const hasQty = item.editQty !== '' && Number(item.editQty) > 0;
+            const qtyLabel = !hasQty ? '' : item.isPackMode ? `${item.editQty} ${item.itemPackUnit} (${actualQty} ${item.unit})` : `${item.editQty} ${item.unit}`;
+            const cost = getItemCost(item);
+            return <tr key={`print-${item.id}`}>
+              <td>
+                <strong>{item.name}</strong>
+                {item.brand ? <div className="sub-note">{item.brand}</div> : null}
+                {item.itemNotes ? <div className="sub-note" style={{ fontStyle: 'italic' }}>{item.itemNotes}</div> : null}
+              </td>
+              <td>{qtyLabel || ' '}</td>
+              <td>{item.bestSupplierName || '-'}</td>
+              <td>{cost > 0 ? currency(cost) : '-'}</td>
+            </tr>;
+          })}</tbody>
+        </table>
+        {!selectedItems.length ? <p>Nenhum item selecionado para impressao.</p> : null}
+      </div>
 
       {!editableList.length
-        ? <EmptyState text="Nenhum item na lista. Use o campo acima para adicionar itens ou verifique as configuracoes de estoque minimo." />
-        : <div className="table-wrap">
+        ? <EmptyState text="Nenhum item cadastrado para gerar a lista de compra." />
+        : <div className="table-wrap no-print">
             <table className="purchase-table">
-              <thead><tr><th className="col-check no-print"><input type="checkbox" title={editableList.every((i) => i.included) ? 'Desmarcar todos' : 'Selecionar todos'} checked={editableList.length > 0 && editableList.every((i) => i.included)} ref={(el) => { if (el) el.indeterminate = editableList.some((i) => i.included) && !editableList.every((i) => i.included); }} onChange={(e) => setEditableList((prev) => prev.map((i) => ({ ...i, included: e.target.checked })))} style={{ width: 'auto', cursor: 'pointer', margin: 0 }} /></th><th>Item</th><th>Quantidade</th><th className="no-print">Und.</th><th>Fornecedor</th><th>Custo est.</th><th className="no-print"></th></tr></thead>
+              <thead><tr><th className="col-check no-print"><input type="checkbox" title={editableList.every((i) => i.included) ? 'Desmarcar todos' : 'Selecionar todos'} checked={editableList.length > 0 && editableList.every((i) => i.included)} ref={(el) => { if (el) el.indeterminate = editableList.some((i) => i.included) && !editableList.every((i) => i.included); }} onChange={(e) => onPurchaseListDraftChange((prev) => prev.map((i) => ({ ...i, included: e.target.checked })))} style={{ width: 'auto', cursor: 'pointer', margin: 0 }} /></th><th>Item</th><th>Quantidade</th><th className="no-print">Und.</th><th>Fornecedor</th><th>Custo est.</th><th className="no-print"></th></tr></thead>
               <tbody>{editableList.map((item) => {
                 const actualQty = getActualQty(item);
                 const cost = item.included ? getItemCost(item) : 0;
-                const qtyLabel = item.isPackMode ? `${item.editQty} ${item.itemPackUnit} (${actualQty} ${item.unit})` : `${item.editQty} ${item.unit}`;
+                const hasQty = item.editQty !== '' && Number(item.editQty) > 0;
+                const qtyLabel = !hasQty ? '' : item.isPackMode ? `${item.editQty} ${item.itemPackUnit} (${actualQty} ${item.unit})` : `${item.editQty} ${item.unit}`;
                 return <tr key={item.id} style={{ opacity: item.included ? 1 : 0.4 }} className={item.included ? '' : 'no-print'}>
                   <td className="col-check">
                     <input className="no-print" type="checkbox" checked={item.included} onChange={(e) => updateItem(item.id, { included: e.target.checked })} style={{ width: 'auto', cursor: 'pointer', margin: 0 }} />
@@ -1667,15 +2221,15 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
                   </td>
                   <td>
                     <div className="no-print" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <input type="number" min="1" step="1" value={item.editQty} onChange={(e) => updateItem(item.id, { editQty: Number(e.target.value) || 1 })} style={{ width: '80px', padding: '6px 8px' }} />
-                      {item.isPackMode && <div className="pack-preview" style={{ fontSize: '11px', padding: '4px 8px' }}>{item.editQty} {item.itemPackUnit} = {actualQty} {item.unit}</div>}
+                      <input type="number" min="0" step="1" value={item.editQty} onChange={(e) => updateItem(item.id, { editQty: e.target.value })} placeholder="Qtd" style={{ width: '80px', padding: '6px 8px' }} />
+                      {item.isPackMode && hasQty ? <div className="pack-preview" style={{ fontSize: '11px', padding: '4px 8px' }}>{item.editQty} {item.itemPackUnit} = {actualQty} {item.unit}</div> : null}
                     </div>
-                    <span className="print-only">{qtyLabel}</span>
+                    <span className="print-only">{qtyLabel || ' '}</span>
                   </td>
                   <td className="no-print">{item.isPackMode ? item.itemPackUnit : item.unit}</td>
                   <td>{item.bestSupplierName || <span style={{ color: 'var(--muted)' }}>-</span>}</td>
                   <td>{cost > 0 ? currency(cost) : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
-                  <td className="no-print"><button className="table-action" type="button" onClick={() => removeItem(item.id)} style={{ padding: '5px 8px', fontSize: '12px' }}>Remover</button></td>
+                  <td className="no-print"><button className="table-action" type="button" onClick={() => clearItemQty(item.id)} style={{ padding: '5px 8px', fontSize: '12px' }}>Limpar</button></td>
                 </tr>;
               })}</tbody>
             </table>

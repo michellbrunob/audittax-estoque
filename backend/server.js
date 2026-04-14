@@ -926,6 +926,16 @@ const receiptUpload = multer({ storage: multer.diskStorage({
   filename: (_, file, cb) => { const ext = path.extname(file.originalname) || '.bin'; cb(null, `${Date.now()}${ext}`); }
 }) });
 
+function toStoredFile(file, label = '') {
+  if (!file) return null;
+  return {
+    storedName: file.filename,
+    originalName: file.originalname,
+    mimeType: file.mimetype || '',
+    label,
+  };
+}
+
 // Estado completo (carga inicial)
 app.get('/api/state', (_, res) => { try { res.json(Q.getFullState()); } catch (e) { res.status(500).json({ error: e.message }); } });
 
@@ -971,7 +981,23 @@ app.get('/api/receipts/:id/file', (req, res) => {
     res.sendFile(fullPath);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.delete('/api/receipts/:id', (req, res) => { try { Q.deleteReceipt(Number(req.params.id)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/receipts/:receiptId/files/:fileId', (req, res) => {
+  try {
+    const attachment = Q.getReceiptAttachment(Number(req.params.receiptId), Number(req.params.fileId));
+    if (!attachment?.filePath) return res.status(404).json({ error: 'Arquivo complementar nao encontrado' });
+    const fullPath = path.join(RECEIPTS_DIR, attachment.filePath);
+    if (!require('fs').existsSync(fullPath)) return res.status(404).json({ error: 'Arquivo nao existe em disco' });
+    res.setHeader('Content-Type', attachment.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${attachment.fileName || 'anexo'}"`);
+    res.sendFile(fullPath);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/receipts/:id', (req, res) => {
+  try {
+    const mode = req.query.mode === 'revert-import' ? 'revert-import' : 'receipt-only';
+    res.json(Q.deleteReceipt(Number(req.params.id), mode));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 // â”€â”€â”€ Suppliers â”€â”€â”€
 app.get('/api/suppliers', (_, res) => res.json(Q.getAllSuppliers()));
@@ -998,11 +1024,12 @@ app.get('/api/inventory/assets', (_, res) => { try { res.json(Q.getAllInventoryA
 app.post('/api/inventory/assets', (req, res) => { try { res.json(Q.insertInventoryAsset(req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
 app.put('/api/inventory/assets/:id', (req, res) => { try { res.json(Q.updateInventoryAsset(Number(req.params.id), req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
 app.delete('/api/inventory/assets/:id', (req, res) => { try { Q.deleteInventoryAsset(Number(req.params.id)); res.json({ ok: true }); } catch(e) { res.status(400).json({ error: e.message }); } });
-app.post('/api/import-receipt', receiptUpload.single('file'), (req, res) => {
+app.post('/api/import-receipt', receiptUpload.fields([{ name: 'primaryFile', maxCount: 1 }, { name: 'attachmentFile', maxCount: 1 }]), (req, res) => {
   try {
     const data = req.body.data ? JSON.parse(req.body.data) : req.body;
-    const filePath = req.file ? req.file.filename : '';
-    const result = Q.batchImportReceipt(data, filePath);
+    const primaryFile = toStoredFile(req.files?.primaryFile?.[0]);
+    const attachmentFile = toStoredFile(req.files?.attachmentFile?.[0]);
+    const result = Q.batchImportReceipt(data, primaryFile, attachmentFile ? [attachmentFile] : []);
     // Retorna estado atualizado junto com resultado
     result.state = Q.getFullState();
     res.json(result);
@@ -1019,7 +1046,7 @@ if (require('fs').existsSync(DIST_DIR)) {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\nâ•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—`);
-  console.log(`â•‘  Audittax â€” Controle de Estoque          â•‘`);
+  console.log(`â•‘  Audittax â€” Gestão Integrada           â•‘`);
   console.log(`â•‘  http://localhost:${PORT}                   â•‘`);
   console.log(`â•‘  API REST + Frontend prontos             â•‘`);
   console.log(`â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n`);

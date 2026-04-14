@@ -84,6 +84,17 @@ db.exec(`
     queryUrl TEXT DEFAULT ''
   );
 
+  CREATE TABLE IF NOT EXISTS receipt_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    receiptId INTEGER NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+    kind TEXT DEFAULT 'attachment',
+    label TEXT DEFAULT '',
+    fileName TEXT DEFAULT '',
+    filePath TEXT DEFAULT '',
+    mimeType TEXT DEFAULT '',
+    createdAt TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS cycle (
     id INTEGER PRIMARY KEY CHECK(id = 1),
     lastPurchaseDate TEXT NOT NULL DEFAULT '',
@@ -153,6 +164,28 @@ db.exec(`
     notes TEXT DEFAULT '',
     createdAt TEXT DEFAULT CURRENT_TIMESTAMP
   );
+`);
+
+function hasColumn(tableName, columnName) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  return columns.some((column) => column.name === columnName);
+}
+
+function ensureColumn(tableName, columnName, definition) {
+  if (!hasColumn(tableName, columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
+ensureColumn('items', 'createdByReceiptId', 'INTEGER REFERENCES receipts(id) ON DELETE SET NULL');
+ensureColumn('movements', 'receiptId', 'INTEGER REFERENCES receipts(id) ON DELETE SET NULL');
+ensureColumn('price_history', 'receiptId', 'INTEGER REFERENCES receipts(id) ON DELETE SET NULL');
+
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_items_created_by_receipt ON items(createdByReceiptId);
+  CREATE INDEX IF NOT EXISTS idx_movements_receipt_id ON movements(receiptId);
+  CREATE INDEX IF NOT EXISTS idx_price_history_receipt_id ON price_history(receiptId);
+  CREATE INDEX IF NOT EXISTS idx_receipt_files_receipt_id ON receipt_files(receiptId);
 `);
 
 module.exports = { db, DB_PATH, STORAGE_DIR, RECEIPTS_DIR };

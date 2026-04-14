@@ -9,7 +9,7 @@ const unbool = (v) => v === 1;
 // ─── Items ───
 const stmtAllItems = db.prepare('SELECT * FROM items ORDER BY name');
 const stmtGetItem = db.prepare('SELECT * FROM items WHERE id = ?');
-const stmtInsertItem = db.prepare('INSERT INTO items (name, unit, quantity, minStock, weeklyConsumption) VALUES (@name, @unit, @quantity, @minStock, @weeklyConsumption)');
+const stmtInsertItem = db.prepare('INSERT INTO items (name, unit, quantity, minStock, weeklyConsumption, createdByReceiptId) VALUES (@name, @unit, @quantity, @minStock, @weeklyConsumption, @createdByReceiptId)');
 const stmtUpdateItem = db.prepare('UPDATE items SET name=@name, unit=@unit, quantity=@quantity, minStock=@minStock, weeklyConsumption=@weeklyConsumption WHERE id=@id');
 const stmtDeleteItem = db.prepare('DELETE FROM items WHERE id = ?');
 const stmtUpdateItemQty = db.prepare('UPDATE items SET quantity = @quantity WHERE id = @id');
@@ -18,8 +18,23 @@ const stmtUpdateItemConsumption = db.prepare('UPDATE items SET weeklyConsumption
 const getAllItems = () => stmtAllItems.all();
 const getItem = (id) => stmtGetItem.get(id);
 const insertItem = (p) => {
-  const r = stmtInsertItem.run({ name: p.name || '', unit: p.unit || 'un', quantity: Number(p.quantity || 0), minStock: Number(p.minStock || 0), weeklyConsumption: Number(p.weeklyConsumption || 0) });
-  return { id: Number(r.lastInsertRowid), name: p.name || '', unit: p.unit || 'un', quantity: Number(p.quantity || 0), minStock: Number(p.minStock || 0), weeklyConsumption: Number(p.weeklyConsumption || 0) };
+  const r = stmtInsertItem.run({
+    name: p.name || '',
+    unit: p.unit || 'un',
+    quantity: Number(p.quantity || 0),
+    minStock: Number(p.minStock || 0),
+    weeklyConsumption: Number(p.weeklyConsumption || 0),
+    createdByReceiptId: p.createdByReceiptId || null,
+  });
+  return {
+    id: Number(r.lastInsertRowid),
+    name: p.name || '',
+    unit: p.unit || 'un',
+    quantity: Number(p.quantity || 0),
+    minStock: Number(p.minStock || 0),
+    weeklyConsumption: Number(p.weeklyConsumption || 0),
+    createdByReceiptId: p.createdByReceiptId || null,
+  };
 };
 const updateItem = (id, p) => {
   stmtUpdateItem.run({ id, name: p.name, unit: p.unit, quantity: Number(p.quantity || 0), minStock: Number(p.minStock || 0), weeklyConsumption: Number(p.weeklyConsumption || 0) });
@@ -31,11 +46,18 @@ const updateItemConsumption = (id, wc) => stmtUpdateItemConsumption.run({ id, we
 
 // ─── Movements ───
 const stmtAllMovements = db.prepare('SELECT * FROM movements ORDER BY date DESC, id DESC');
-const stmtInsertMovement = db.prepare('INSERT INTO movements (type, itemId, quantity, date, notes) VALUES (@type, @itemId, @quantity, @date, @notes)');
+const stmtInsertMovement = db.prepare('INSERT INTO movements (type, itemId, quantity, date, notes, receiptId) VALUES (@type, @itemId, @quantity, @date, @notes, @receiptId)');
 
 const getAllMovements = () => stmtAllMovements.all();
 const insertMovement = (p) => {
-  const r = stmtInsertMovement.run({ type: p.type, itemId: p.itemId, quantity: Number(p.quantity), date: p.date || new Date().toISOString().slice(0, 10), notes: p.notes || '' });
+  const r = stmtInsertMovement.run({
+    type: p.type,
+    itemId: p.itemId,
+    quantity: Number(p.quantity),
+    date: p.date || new Date().toISOString().slice(0, 10),
+    notes: p.notes || '',
+    receiptId: p.receiptId || null,
+  });
   const item = getItem(p.itemId);
   if (item) {
     let newQty = item.quantity;
@@ -44,17 +66,40 @@ const insertMovement = (p) => {
     else if (p.type === 'avulso') newQty += Number(p.quantity);
     updateItemQty(p.itemId, newQty);
   }
-  return { id: Number(r.lastInsertRowid), type: p.type, itemId: p.itemId, quantity: Number(p.quantity), date: p.date || new Date().toISOString().slice(0, 10), notes: p.notes || '' };
+  return {
+    id: Number(r.lastInsertRowid),
+    type: p.type,
+    itemId: p.itemId,
+    quantity: Number(p.quantity),
+    date: p.date || new Date().toISOString().slice(0, 10),
+    notes: p.notes || '',
+    receiptId: p.receiptId || null,
+  };
 };
 
 // ─── Price History ───
 const stmtAllPrices = db.prepare('SELECT * FROM price_history ORDER BY date DESC, id DESC');
-const stmtInsertPrice = db.prepare('INSERT INTO price_history (itemId, supplierId, market, price, date) VALUES (@itemId, @supplierId, @market, @price, @date)');
+const stmtInsertPrice = db.prepare('INSERT INTO price_history (itemId, supplierId, market, price, date, receiptId) VALUES (@itemId, @supplierId, @market, @price, @date, @receiptId)');
 
 const getAllPrices = () => stmtAllPrices.all();
 const insertPrice = (p) => {
-  const r = stmtInsertPrice.run({ itemId: p.itemId, supplierId: p.supplierId || null, market: p.market || '', price: Number(p.price), date: p.date || new Date().toISOString().slice(0, 10) });
-  return { id: Number(r.lastInsertRowid), itemId: p.itemId, supplierId: p.supplierId || null, market: p.market || '', price: Number(p.price), date: p.date || new Date().toISOString().slice(0, 10) };
+  const r = stmtInsertPrice.run({
+    itemId: p.itemId,
+    supplierId: p.supplierId || null,
+    market: p.market || '',
+    price: Number(p.price),
+    date: p.date || new Date().toISOString().slice(0, 10),
+    receiptId: p.receiptId || null,
+  });
+  return {
+    id: Number(r.lastInsertRowid),
+    itemId: p.itemId,
+    supplierId: p.supplierId || null,
+    market: p.market || '',
+    price: Number(p.price),
+    date: p.date || new Date().toISOString().slice(0, 10),
+    receiptId: p.receiptId || null,
+  };
 };
 
 // ─── Extra Purchases ───
@@ -72,9 +117,74 @@ const stmtAllReceipts = db.prepare('SELECT * FROM receipts ORDER BY date DESC, i
 const stmtGetReceipt = db.prepare('SELECT * FROM receipts WHERE id = ?');
 const stmtInsertReceipt = db.prepare('INSERT INTO receipts (title, value, date, importedAt, notes, source, supplierId, fileName, filePath, mimeType, accessKey, queryUrl) VALUES (@title, @value, @date, @importedAt, @notes, @source, @supplierId, @fileName, @filePath, @mimeType, @accessKey, @queryUrl)');
 const stmtDeleteReceipt = db.prepare('DELETE FROM receipts WHERE id = ?');
+const stmtReceiptFilesByReceipt = db.prepare('SELECT * FROM receipt_files WHERE receiptId = ? ORDER BY id');
+const stmtReceiptFileById = db.prepare('SELECT * FROM receipt_files WHERE id = ? AND receiptId = ?');
+const stmtInsertReceiptFile = db.prepare('INSERT INTO receipt_files (receiptId, kind, label, fileName, filePath, mimeType) VALUES (@receiptId, @kind, @label, @fileName, @filePath, @mimeType)');
+const stmtCountReceiptMovements = db.prepare('SELECT COUNT(*) AS total FROM movements WHERE receiptId = ?');
+const stmtCountReceiptPrices = db.prepare('SELECT COUNT(*) AS total FROM price_history WHERE receiptId = ?');
+const stmtCountReceiptCreatedItems = db.prepare('SELECT COUNT(*) AS total FROM items WHERE createdByReceiptId = ?');
+const stmtListReceiptMovements = db.prepare('SELECT id, type, itemId, quantity FROM movements WHERE receiptId = ? ORDER BY id');
+const stmtListReceiptPrices = db.prepare('SELECT id, itemId FROM price_history WHERE receiptId = ? ORDER BY id');
+const stmtListReceiptCreatedItems = db.prepare('SELECT id, name, quantity FROM items WHERE createdByReceiptId = ? ORDER BY id');
+const stmtDeleteReceiptMovements = db.prepare('DELETE FROM movements WHERE receiptId = ?');
+const stmtDeleteReceiptPrices = db.prepare('DELETE FROM price_history WHERE receiptId = ?');
+const stmtDeleteReceiptCreatedItems = db.prepare('DELETE FROM items WHERE createdByReceiptId = ?');
+const stmtCountExternalItemReferences = db.prepare(`
+  SELECT
+    (SELECT COUNT(*) FROM movements WHERE itemId = @itemId AND (receiptId IS NULL OR receiptId != @receiptId)) +
+    (SELECT COUNT(*) FROM price_history WHERE itemId = @itemId AND (receiptId IS NULL OR receiptId != @receiptId)) +
+    (SELECT COUNT(*) FROM extra_purchases WHERE itemId = @itemId) AS total
+`);
 
-const getAllReceipts = () => stmtAllReceipts.all().map((r) => ({ ...r, hasFile: Boolean(r.filePath) }));
-const getReceipt = (id) => stmtGetReceipt.get(id);
+function getReceiptImportSummary(receiptId) {
+  const movementCount = stmtCountReceiptMovements.get(receiptId)?.total || 0;
+  const priceCount = stmtCountReceiptPrices.get(receiptId)?.total || 0;
+  const createdItemCount = stmtCountReceiptCreatedItems.get(receiptId)?.total || 0;
+
+  return {
+    movementCount,
+    priceCount,
+    createdItemCount,
+    canRevertImport: movementCount > 0 || priceCount > 0 || createdItemCount > 0,
+  };
+}
+
+function hydrateReceipt(receipt) {
+  if (!receipt) {
+    return null;
+  }
+
+  const attachments = [];
+  if (receipt.filePath) {
+    attachments.push({
+      id: `primary-${receipt.id}`,
+      receiptId: receipt.id,
+      kind: 'primary',
+      label: receipt.mimeType?.includes('xml') ? 'XML principal' : receipt.mimeType?.includes('pdf') ? 'PDF principal' : 'Arquivo principal',
+      fileName: receipt.fileName || '',
+      filePath: receipt.filePath || '',
+      mimeType: receipt.mimeType || '',
+      isPrimary: true,
+    });
+  }
+
+  stmtReceiptFilesByReceipt.all(receipt.id).forEach((file) => {
+    attachments.push({
+      ...file,
+      isPrimary: false,
+    });
+  });
+
+  return {
+    ...receipt,
+    hasFile: Boolean(receipt.filePath),
+    attachments,
+    importSummary: getReceiptImportSummary(receipt.id),
+  };
+}
+
+const getAllReceipts = () => stmtAllReceipts.all().map(hydrateReceipt);
+const getReceipt = (id) => hydrateReceipt(stmtGetReceipt.get(id));
 const insertReceipt = (p, filePath = '') => {
   const r = stmtInsertReceipt.run({
     title: p.title || '', value: Number(p.value || 0), date: p.date || new Date().toISOString().slice(0, 10),
@@ -84,13 +194,83 @@ const insertReceipt = (p, filePath = '') => {
   });
   return { id: Number(r.lastInsertRowid), ...p, filePath };
 };
-const deleteReceipt = (id) => {
-  const receipt = getReceipt(id);
+function deleteReceiptFile(receipt) {
   if (receipt?.filePath) {
     const fullPath = path.join(RECEIPTS_DIR, receipt.filePath);
     try { fs.unlinkSync(fullPath); } catch { /* ok */ }
   }
-  stmtDeleteReceipt.run(id);
+}
+
+function deleteAttachmentFiles(receiptId) {
+  stmtReceiptFilesByReceipt.all(receiptId).forEach((file) => {
+    if (!file?.filePath) return;
+    const fullPath = path.join(RECEIPTS_DIR, file.filePath);
+    try { fs.unlinkSync(fullPath); } catch { /* ok */ }
+  });
+}
+
+function movementImpact(type, quantity) {
+  const amount = Number(quantity || 0);
+  if (type === 'saida') return -amount;
+  return amount;
+}
+
+const deleteReceipt = (id, mode = 'receipt-only') => {
+  const runDelete = db.transaction(() => {
+    const receipt = getReceipt(id);
+    if (!receipt) {
+      return { ok: true, mode, deletedReceiptId: id, importSummary: getReceiptImportSummary(id) };
+    }
+
+    if (mode === 'revert-import') {
+      const linkedMovements = stmtListReceiptMovements.all(id);
+      const linkedCreatedItems = stmtListReceiptCreatedItems.all(id);
+      const stockAdjustments = new Map();
+
+      linkedMovements.forEach((movement) => {
+        const current = stockAdjustments.get(movement.itemId) || 0;
+        stockAdjustments.set(movement.itemId, current + movementImpact(movement.type, movement.quantity));
+      });
+
+      for (const [itemId, importedDelta] of stockAdjustments.entries()) {
+        const item = getItem(itemId);
+        if (!item) continue;
+        const nextQty = Number(item.quantity || 0) - importedDelta;
+        if (nextQty < 0) {
+          throw new Error(`Nao foi possivel reverter a importacao do item "${item.name}". O estoque atual ja foi consumido parcialmente.`);
+        }
+      }
+
+      for (const [itemId, importedDelta] of stockAdjustments.entries()) {
+        const item = getItem(itemId);
+        if (!item) continue;
+        updateItemQty(itemId, Number((Number(item.quantity || 0) - importedDelta).toFixed(4)));
+      }
+
+      stmtDeleteReceiptMovements.run(id);
+      stmtDeleteReceiptPrices.run(id);
+
+      linkedCreatedItems.forEach((item) => {
+        const refs = stmtCountExternalItemReferences.get({ itemId: item.id, receiptId: id });
+        if ((refs?.total || 0) === 0) {
+          stmtDeleteItem.run(item.id);
+        }
+      });
+    }
+
+    deleteAttachmentFiles(id);
+    deleteReceiptFile(receipt);
+    stmtDeleteReceipt.run(id);
+
+    return {
+      ok: true,
+      mode,
+      deletedReceiptId: id,
+      importSummary: receipt.importSummary || getReceiptImportSummary(id),
+    };
+  });
+
+  return runDelete();
 };
 
 // ─── Suppliers ───
@@ -322,39 +502,86 @@ const migrateFromLocalStorage = (data) => {
 };
 
 // ─── Batch Import ───
-const batchImportReceipt = (payload, filePath = '') => {
+const insertReceiptAttachment = (receiptId, file) => {
+  if (!receiptId || !file?.storedName) {
+    return null;
+  }
+
+  const label = file.label
+    || (file.mimeType?.includes('xml') ? 'XML complementar' : file.mimeType?.includes('pdf') ? 'PDF complementar' : 'Arquivo complementar');
+
+  const result = stmtInsertReceiptFile.run({
+    receiptId,
+    kind: file.kind || 'attachment',
+    label,
+    fileName: file.originalName || file.fileName || '',
+    filePath: file.storedName,
+    mimeType: file.mimeType || '',
+  });
+
+  return { id: Number(result.lastInsertRowid), receiptId, label, fileName: file.originalName || file.fileName || '', filePath: file.storedName, mimeType: file.mimeType || '' };
+};
+
+const getReceiptAttachment = (receiptId, fileId) => stmtReceiptFileById.get(fileId, receiptId);
+
+const batchImportReceipt = (payload, primaryFile = null, extraFiles = []) => {
   const batch = db.transaction(() => {
-    const results = { newItems: [], movements: [], prices: [], receipt: null };
+    const results = { newItems: [], movements: [], prices: [], receipt: null, attachments: [] };
+    const receiptResult = stmtInsertReceipt.run({
+      title: payload.title || payload.fileName || 'Comprovante importado',
+      value: Number(payload.totalValue || 0), date: payload.date || new Date().toISOString().slice(0, 10),
+      importedAt: new Date().toISOString(), notes: payload.notes || '', source: payload.source || 'entrada-ocr',
+      supplierId: payload.supplierId || null,
+      fileName: primaryFile?.originalName || payload.fileName || '',
+      filePath: primaryFile?.storedName || '',
+      mimeType: primaryFile?.mimeType || payload.mimeType || '',
+      accessKey: payload.accessKey || '', queryUrl: payload.queryUrl || ''
+    });
+    const receiptId = Number(receiptResult.lastInsertRowid);
+    results.receipt = { id: receiptId };
+    results.attachments = extraFiles.map((file) => insertReceiptAttachment(receiptId, file)).filter(Boolean);
 
     for (const draft of (payload.items || [])) {
       if (!draft.import) continue;
       let itemId = draft.linkedItemId;
       if (!itemId) {
-        const r = stmtInsertItem.run({ name: draft.name, unit: draft.unit || 'un', quantity: 0, minStock: 1, weeklyConsumption: 0 });
+        const r = stmtInsertItem.run({
+          name: draft.name,
+          unit: draft.unit || 'un',
+          quantity: 0,
+          minStock: 1,
+          weeklyConsumption: 0,
+          createdByReceiptId: receiptId,
+        });
         itemId = Number(r.lastInsertRowid);
         results.newItems.push({ id: itemId, name: draft.name });
       }
 
-      const mR = stmtInsertMovement.run({ type: 'entrada', itemId, quantity: Number(draft.quantity || 0), date: payload.date || new Date().toISOString().slice(0, 10), notes: `Importado de ${payload.fileName || 'comprovante'}` });
+      const mR = stmtInsertMovement.run({
+        type: 'entrada',
+        itemId,
+        quantity: Number(draft.quantity || 0),
+        date: payload.date || new Date().toISOString().slice(0, 10),
+        notes: `Importado de ${payload.fileName || 'comprovante'}`,
+        receiptId,
+      });
       results.movements.push({ id: Number(mR.lastInsertRowid), itemId });
 
       const item = getItem(itemId);
       if (item) updateItemQty(itemId, item.quantity + Number(draft.quantity || 0));
 
       if (draft.unitPrice > 0 && payload.supplierId) {
-        const pR = stmtInsertPrice.run({ itemId, supplierId: Number(payload.supplierId), market: '', price: Number(draft.unitPrice), date: payload.date || new Date().toISOString().slice(0, 10) });
+        const pR = stmtInsertPrice.run({
+          itemId,
+          supplierId: Number(payload.supplierId),
+          market: '',
+          price: Number(draft.unitPrice),
+          date: payload.date || new Date().toISOString().slice(0, 10),
+          receiptId,
+        });
         results.prices.push({ id: Number(pR.lastInsertRowid), itemId });
       }
     }
-
-    const rR = stmtInsertReceipt.run({
-      title: payload.title || payload.fileName || 'Comprovante importado',
-      value: Number(payload.totalValue || 0), date: payload.date || new Date().toISOString().slice(0, 10),
-      importedAt: new Date().toISOString(), notes: payload.notes || '', source: payload.source || 'entrada-ocr',
-      supplierId: payload.supplierId || null, fileName: payload.fileName || '', filePath: filePath || '',
-      mimeType: payload.mimeType || '', accessKey: payload.accessKey || '', queryUrl: payload.queryUrl || ''
-    });
-    results.receipt = { id: Number(rR.lastInsertRowid) };
 
     return results;
   });
@@ -367,7 +594,7 @@ module.exports = {
   getAllMovements, insertMovement,
   getAllPrices, insertPrice,
   getAllExtras, insertExtra,
-  getAllReceipts, getReceipt, insertReceipt, deleteReceipt,
+  getAllReceipts, getReceipt, getReceiptAttachment, insertReceipt, insertReceiptAttachment, deleteReceipt,
   getAllSuppliers, getSupplier, insertSupplier, updateSupplier, deleteSupplier,
   getCycle, updateCycle: updateCycleQ,
   getSettings, updateSettings: updateSettingsQ,
