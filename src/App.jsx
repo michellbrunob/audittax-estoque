@@ -1121,7 +1121,10 @@ function App() {
     return Math.max(0, Math.ceil((quantity / weekly) * 7));
   };
   const lowStockItems = useMemo(() => state.items.filter((item) => Number(item.quantity || 0) <= Number(item.minStock || 0)), [state.items]);
-  const vulnerableItems = useMemo(() => state.items.filter((item) => durationForItem(item) < daysUntilNextPurchase), [state.items, daysUntilNextPurchase]);
+  const vulnerableItems = useMemo(() => state.items.filter((item) => {
+    const belowMin = Number(item.quantity || 0) <= Number(item.minStock || 0);
+    return belowMin || durationForItem(item) < daysUntilNextPurchase;
+  }), [state.items, daysUntilNextPurchase]);
   const maintOverdue = (state.maintenanceAssets || []).filter((a) => {
     if (!a.lastMaintenanceDate) return true;
     const last = new Date(a.lastMaintenanceDate);
@@ -2115,6 +2118,71 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
     printWindow.print();
   };
 
+  const printCountSheet = () => {
+    const sorted = [...items].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt-BR'));
+    const rows = sorted.map((item) => `
+      <tr>
+        <td>${item.name}${item.brand ? ` <span class="brand">(${item.brand})</span>` : ''}</td>
+        <td>${item.unit || ''}</td>
+        <td class="count-cell">&nbsp;</td>
+        <td>&nbsp;</td>
+      </tr>
+    `).join('');
+
+    const printWindow = window.open('', '_blank', 'width=900,height=700');
+    if (!printWindow) return;
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html lang="pt-BR">
+        <head>
+          <meta charset="UTF-8" />
+          <title>Folha de Contagem de Estoque</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
+            h1 { margin: 0 0 6px; font-size: 22px; }
+            p { margin: 0 0 14px; color: #555; font-size: 12px; }
+            .meta { display: flex; gap: 24px; margin: 0 0 18px; font-size: 12px; }
+            .meta div { border-bottom: 1px solid #888; min-width: 180px; padding: 4px 0; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #888; padding: 10px; text-align: left; vertical-align: middle; }
+            th { background: #eee; text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; }
+            td.count-cell { width: 120px; height: 28px; }
+            td:nth-child(2) { width: 70px; text-align: center; }
+            td:last-child { width: 180px; }
+            .brand { color: #666; font-weight: normal; font-size: 11px; }
+            .instructions { font-size: 11px; color: #444; margin: 0 0 12px; padding: 8px 12px; background: #f6f6f6; border-left: 3px solid #888; }
+          </style>
+        </head>
+        <body>
+          <h1>Folha de Contagem de Estoque</h1>
+          <div class="meta">
+            <div><strong>Data:</strong> ${formatDate(todayString())}</div>
+            <div><strong>Responsável:</strong> ____________________</div>
+            <div><strong>Assinatura:</strong> ____________________</div>
+          </div>
+          <p class="instructions">Conte fisicamente cada item e anote a quantidade encontrada. Se o item não for localizado, escreva "0". Use o campo de observações para avarias, validade ou divergências.</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Unidade</th>
+                <th>Qtd contada</th>
+                <th>Observações</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows || '<tr><td colspan="4">Nenhum item cadastrado.</td></tr>'}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  };
+
   const exportCsv = () => {
     const headers = ['Item', 'Unidade', 'Qtd Atual', 'Estoque Minimo', 'Consumo Semanal', 'Duracao (dias)', 'Status'];
     const rows = items.map((item) => {
@@ -2142,7 +2210,10 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
     <section className="panel no-print">
       <div className="panel-head">
         <div><h3>Posicao atual do estoque</h3><p>Todos os {items.length} itens com status e estimativa de duração</p></div>
-        <button className="ghost-button" type="button" onClick={exportCsv}>Exportar CSV</button>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button className="ghost-button" type="button" onClick={printCountSheet}>Imprimir folha de contagem</button>
+          <button className="ghost-button" type="button" onClick={exportCsv}>Exportar CSV</button>
+        </div>
       </div>
       <div className="table-wrap">
         <table>
