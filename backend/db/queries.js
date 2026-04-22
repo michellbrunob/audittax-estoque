@@ -315,34 +315,41 @@ const updateSettingsQ = (p) => { stmtUpdateSettings.run({ anthropicApiKey: p.ant
 // ─── Maintenance Assets ───
 const stmtAllAssets = db.prepare('SELECT * FROM maintenance_assets ORDER BY name');
 const stmtGetAsset = db.prepare('SELECT * FROM maintenance_assets WHERE id = ?');
-const stmtInsertAsset = db.prepare('INSERT INTO maintenance_assets (category,name,location,brand,model,serialNumber,supplierId,supplierName,intervalDays,lastMaintenanceDate,notes,btuCapacity,acType,inkColors,poolVolume,areaM2,filterIntervalDays,active) VALUES (@category,@name,@location,@brand,@model,@serialNumber,@supplierId,@supplierName,@intervalDays,@lastMaintenanceDate,@notes,@btuCapacity,@acType,@inkColors,@poolVolume,@areaM2,@filterIntervalDays,@active)');
-const stmtUpdateAsset = db.prepare('UPDATE maintenance_assets SET category=@category,name=@name,location=@location,brand=@brand,model=@model,serialNumber=@serialNumber,supplierId=@supplierId,supplierName=@supplierName,intervalDays=@intervalDays,lastMaintenanceDate=@lastMaintenanceDate,notes=@notes,btuCapacity=@btuCapacity,acType=@acType,inkColors=@inkColors,poolVolume=@poolVolume,areaM2=@areaM2,filterIntervalDays=@filterIntervalDays,active=@active WHERE id=@id');
+const stmtInsertAsset = db.prepare('INSERT INTO maintenance_assets (category,name,location,brand,model,serialNumber,supplierId,supplierName,intervalDays,lastMaintenanceDate,notes,btuCapacity,acType,inkColors,poolVolume,areaM2,filterIntervalDays,herbicideIntervalDays,lastHerbicideDate,active) VALUES (@category,@name,@location,@brand,@model,@serialNumber,@supplierId,@supplierName,@intervalDays,@lastMaintenanceDate,@notes,@btuCapacity,@acType,@inkColors,@poolVolume,@areaM2,@filterIntervalDays,@herbicideIntervalDays,@lastHerbicideDate,@active)');
+const stmtUpdateAsset = db.prepare('UPDATE maintenance_assets SET category=@category,name=@name,location=@location,brand=@brand,model=@model,serialNumber=@serialNumber,supplierId=@supplierId,supplierName=@supplierName,intervalDays=@intervalDays,lastMaintenanceDate=@lastMaintenanceDate,notes=@notes,btuCapacity=@btuCapacity,acType=@acType,inkColors=@inkColors,poolVolume=@poolVolume,areaM2=@areaM2,filterIntervalDays=@filterIntervalDays,herbicideIntervalDays=@herbicideIntervalDays,lastHerbicideDate=@lastHerbicideDate,active=@active WHERE id=@id');
 const stmtDeleteAsset = db.prepare('DELETE FROM maintenance_assets WHERE id = ?');
 const stmtUpdateAssetLastDate = db.prepare('UPDATE maintenance_assets SET lastMaintenanceDate=@date WHERE id=@id');
+const stmtUpdateAssetHerbicideDate = db.prepare('UPDATE maintenance_assets SET lastHerbicideDate=@date WHERE id=@id');
 
 const getAllAssets = () => stmtAllAssets.all().map((a) => ({ ...a, active: unbool(a.active) }));
 const getAsset = (id) => { const a = stmtGetAsset.get(id); return a ? { ...a, active: unbool(a.active) } : null; };
 const insertAsset = (p) => {
-  const r = stmtInsertAsset.run({ category: p.category||'outro', name: p.name||'', location: p.location||'', brand: p.brand||'', model: p.model||'', serialNumber: p.serialNumber||'', supplierId: p.supplierId||null, supplierName: p.supplierName||'', intervalDays: Number(p.intervalDays||180), lastMaintenanceDate: p.lastMaintenanceDate||'', notes: p.notes||'', btuCapacity: p.btuCapacity||'', acType: p.acType||'', inkColors: p.inkColors||'', poolVolume: p.poolVolume||'', areaM2: p.areaM2||'', filterIntervalDays: Number(p.filterIntervalDays||180), active: bool(p.active!==false) });
+  const r = stmtInsertAsset.run({ category: p.category||'outro', name: p.name||'', location: p.location||'', brand: p.brand||'', model: p.model||'', serialNumber: p.serialNumber||'', supplierId: p.supplierId||null, supplierName: p.supplierName||'', intervalDays: Number(p.intervalDays||180), lastMaintenanceDate: p.lastMaintenanceDate||'', notes: p.notes||'', btuCapacity: p.btuCapacity||'', acType: p.acType||'', inkColors: p.inkColors||'', poolVolume: p.poolVolume||'', areaM2: p.areaM2||'', filterIntervalDays: Number(p.filterIntervalDays||180), herbicideIntervalDays: Number(p.herbicideIntervalDays||30), lastHerbicideDate: p.lastHerbicideDate||'', active: bool(p.active!==false) });
   return getAsset(Number(r.lastInsertRowid));
 };
 const updateAsset = (id, p) => {
-  stmtUpdateAsset.run({ id, category: p.category||'outro', name: p.name||'', location: p.location||'', brand: p.brand||'', model: p.model||'', serialNumber: p.serialNumber||'', supplierId: p.supplierId||null, supplierName: p.supplierName||'', intervalDays: Number(p.intervalDays||180), lastMaintenanceDate: p.lastMaintenanceDate||'', notes: p.notes||'', btuCapacity: p.btuCapacity||'', acType: p.acType||'', inkColors: p.inkColors||'', poolVolume: p.poolVolume||'', areaM2: p.areaM2||'', filterIntervalDays: Number(p.filterIntervalDays||180), active: bool(p.active!==false) });
+  stmtUpdateAsset.run({ id, category: p.category||'outro', name: p.name||'', location: p.location||'', brand: p.brand||'', model: p.model||'', serialNumber: p.serialNumber||'', supplierId: p.supplierId||null, supplierName: p.supplierName||'', intervalDays: Number(p.intervalDays||180), lastMaintenanceDate: p.lastMaintenanceDate||'', notes: p.notes||'', btuCapacity: p.btuCapacity||'', acType: p.acType||'', inkColors: p.inkColors||'', poolVolume: p.poolVolume||'', areaM2: p.areaM2||'', filterIntervalDays: Number(p.filterIntervalDays||180), herbicideIntervalDays: Number(p.herbicideIntervalDays||30), lastHerbicideDate: p.lastHerbicideDate||'', active: bool(p.active!==false) });
   return getAsset(id);
 };
 const deleteAsset = (id) => stmtDeleteAsset.run(id);
 
 // ─── Maintenance Records ───
 const stmtAllRecords = db.prepare('SELECT * FROM maintenance_records ORDER BY date DESC, id DESC');
-const stmtInsertRecord = db.prepare('INSERT INTO maintenance_records (assetId,date,type,description,cost,technician,supplierId,notes) VALUES (@assetId,@date,@type,@description,@cost,@technician,@supplierId,@notes)');
+const stmtInsertRecord = db.prepare('INSERT INTO maintenance_records (assetId,date,type,description,cost,technician,supplierId,notes,herbicideProduct,herbicideQuantity,nextApplicationDate) VALUES (@assetId,@date,@type,@description,@cost,@technician,@supplierId,@notes,@herbicideProduct,@herbicideQuantity,@nextApplicationDate)');
 const stmtDeleteRecord = db.prepare('DELETE FROM maintenance_records WHERE id = ?');
 
 const getAllRecords = () => stmtAllRecords.all();
 const insertRecord = (p) => {
   const date = p.date || new Date().toISOString().slice(0,10);
-  const r = stmtInsertRecord.run({ assetId: Number(p.assetId), date, type: p.type||'preventiva', description: p.description||'', cost: Number(p.cost||0), technician: p.technician||'', supplierId: p.supplierId||null, notes: p.notes||'' });
-  stmtUpdateAssetLastDate.run({ id: Number(p.assetId), date });
-  return { id: Number(r.lastInsertRowid), assetId: Number(p.assetId), date, type: p.type||'preventiva', description: p.description||'', cost: Number(p.cost||0), technician: p.technician||'', supplierId: p.supplierId||null, notes: p.notes||'' };
+  const type = p.type || 'preventiva';
+  const payload = { assetId: Number(p.assetId), date, type, description: p.description||'', cost: Number(p.cost||0), technician: p.technician||'', supplierId: p.supplierId||null, notes: p.notes||'', herbicideProduct: p.herbicideProduct||'', herbicideQuantity: p.herbicideQuantity||'', nextApplicationDate: p.nextApplicationDate||'' };
+  const r = stmtInsertRecord.run(payload);
+  if (type === 'aplicacao_herbicida') {
+    stmtUpdateAssetHerbicideDate.run({ id: Number(p.assetId), date });
+  } else {
+    stmtUpdateAssetLastDate.run({ id: Number(p.assetId), date });
+  }
+  return { id: Number(r.lastInsertRowid), ...payload };
 };
 const deleteRecord = (id) => stmtDeleteRecord.run(id);
 
