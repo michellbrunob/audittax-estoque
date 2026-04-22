@@ -1171,7 +1171,7 @@ function App() {
   const addMaintenanceAsset = async (p) => { const r = await window.__api.addMaintenanceAsset(p); setState((s) => ({ ...s, maintenanceAssets: [...s.maintenanceAssets, r].sort((a,b) => a.name.localeCompare(b.name)) })); };
   const updateMaintenanceAsset = async (id, p) => { const r = await window.__api.updateMaintenanceAsset(id, p); setState((s) => ({ ...s, maintenanceAssets: s.maintenanceAssets.map((a) => a.id === id ? r : a) })); };
   const deleteMaintenanceAsset = async (id) => { await window.__api.deleteMaintenanceAsset(id); setState((s) => ({ ...s, maintenanceAssets: s.maintenanceAssets.filter((a) => a.id !== id) })); };
-  const addMaintenanceRecord = async (p) => { const r = await window.__api.addMaintenanceRecord(p); setState((s) => ({ ...s, maintenanceRecords: [r, ...s.maintenanceRecords], maintenanceAssets: s.maintenanceAssets.map((a) => a.id === Number(p.assetId) ? { ...a, lastMaintenanceDate: p.date } : a) })); };
+  const addMaintenanceRecord = async (p) => { const r = await window.__api.addMaintenanceRecord(p); setState((s) => ({ ...s, maintenanceRecords: [r, ...s.maintenanceRecords], maintenanceAssets: s.maintenanceAssets.map((a) => a.id === Number(p.assetId) ? { ...a, ...(p.type === 'aplicacao_herbicida' ? { lastHerbicideDate: p.date } : { lastMaintenanceDate: p.date }) } : a) })); };
   const deleteMaintenanceRecord = async (id) => { await window.__api.deleteMaintenanceRecord(id); setState((s) => ({ ...s, maintenanceRecords: s.maintenanceRecords.filter((r) => r.id !== id) })); };
   const addInventoryAsset = async (p) => { const r = await window.__api.addInventoryAsset(p); setState((s) => ({ ...s, inventoryAssets: [...s.inventoryAssets, r].sort((a,b) => (a.description || '').localeCompare(b.description || '')) })); };
   const updateInventoryAsset = async (id, p) => { const r = await window.__api.updateInventoryAsset(id, p); setState((s) => ({ ...s, inventoryAssets: s.inventoryAssets.map((a) => a.id === id ? r : a) })); };
@@ -2375,15 +2375,20 @@ const calculateInventoryDepreciation = (asset) => {
 };
 const AC_TYPES = ['Split', 'Janela', 'Cassete', 'Piso-teto', 'Central', 'Portatil'];
 
-function assetStatus(asset) {
-  if (!asset.lastMaintenanceDate) return 'overdue';
-  const last = new Date(asset.lastMaintenanceDate);
-  const next = new Date(last.getTime() + Number(asset.intervalDays || 180) * 86400000);
-  const today = new Date();
-  const daysLeft = Math.round((next - today) / 86400000);
+function statusFromDays(daysLeft) {
+  if (daysLeft === null || daysLeft === undefined) return 'overdue';
   if (daysLeft <= 0) return 'overdue';
   if (daysLeft <= 14) return 'due';
   return 'ok';
+}
+function assetStatus(asset) {
+  const mow = statusFromDays(assetDaysLeft(asset));
+  if (asset.category === 'grama' && asset.lastHerbicideDate) {
+    const herb = statusFromDays(assetHerbicideDaysLeft(asset));
+    const order = { overdue: 0, due: 1, ok: 2 };
+    return order[mow] <= order[herb] ? mow : herb;
+  }
+  return mow;
 }
 function assetNextDate(asset) {
   if (!asset.lastMaintenanceDate) return null;
@@ -2396,6 +2401,17 @@ function assetDaysLeft(asset) {
   const next = new Date(last.getTime() + Number(asset.intervalDays || 180) * 86400000);
   return Math.round((next - new Date()) / 86400000);
 }
+function assetHerbicideNextDate(asset) {
+  if (!asset.lastHerbicideDate) return null;
+  const last = new Date(asset.lastHerbicideDate);
+  return new Date(last.getTime() + Number(asset.herbicideIntervalDays || 30) * 86400000).toISOString().slice(0, 10);
+}
+function assetHerbicideDaysLeft(asset) {
+  if (!asset.lastHerbicideDate) return null;
+  const last = new Date(asset.lastHerbicideDate);
+  const next = new Date(last.getTime() + Number(asset.herbicideIntervalDays || 30) * 86400000);
+  return Math.round((next - new Date()) / 86400000);
+}
 
 function MaintenancePanel({ assets, records, suppliers, onAddAsset, onUpdateAsset, onDeleteAsset, onAddRecord, onDeleteRecord }) {
   const [tab, setTab] = React.useState('overview');
@@ -2406,7 +2422,7 @@ function MaintenancePanel({ assets, records, suppliers, onAddAsset, onUpdateAsse
   const [confirmDelete, setConfirmDelete] = React.useState(null); // { type: 'asset'|'record', id }
   const [confirmSave, setConfirmSave] = React.useState(null); // { id, payload }
 
-  const emptyAsset = { category: 'ac', name: '', location: '', brand: '', model: '', serialNumber: '', supplierId: '', supplierName: '', intervalDays: 180, lastMaintenanceDate: '', notes: '', btuCapacity: '', acType: 'Split', inkColors: 'C,M,Y,K', poolVolume: '', areaM2: '', filterIntervalDays: 180 };
+  const emptyAsset = { category: 'ac', name: '', location: '', brand: '', model: '', serialNumber: '', supplierId: '', supplierName: '', intervalDays: 180, lastMaintenanceDate: '', notes: '', btuCapacity: '', acType: 'Split', inkColors: 'C,M,Y,K', poolVolume: '', areaM2: '', filterIntervalDays: 180, herbicideIntervalDays: 30, lastHerbicideDate: '' };
   const emptyRecord = { assetId: '', date: new Date().toISOString().slice(0,10), type: 'preventiva', description: '', cost: '', technician: '', supplierId: '', notes: '', herbicideProduct: '', herbicideQuantity: '', nextApplicationDate: '' };
 
   const [assetForm, setAssetForm] = React.useState(emptyAsset);
@@ -2424,7 +2440,7 @@ function MaintenancePanel({ assets, records, suppliers, onAddAsset, onUpdateAsse
   const openAddAsset = () => { setAssetForm(emptyAsset); setEditAsset(null); setShowAssetModal(true); };
   const openEditAsset = (a) => { setAssetForm({ ...a, supplierId: a.supplierId || '' }); setEditAsset(a); setShowAssetModal(true); };
   const saveAsset = () => {
-    const payload = { ...assetForm, intervalDays: Number(assetForm.intervalDays || 180), filterIntervalDays: Number(assetForm.filterIntervalDays || 180), supplierId: assetForm.supplierId || null };
+    const payload = { ...assetForm, intervalDays: Number(assetForm.intervalDays || 180), filterIntervalDays: Number(assetForm.filterIntervalDays || 180), herbicideIntervalDays: Number(assetForm.herbicideIntervalDays || 30), supplierId: assetForm.supplierId || null };
     if (editAsset) { setConfirmSave({ id: editAsset.id, payload }); setShowAssetModal(false); }
     else { onAddAsset(payload); setShowAssetModal(false); }
   };
@@ -2460,7 +2476,11 @@ function MaintenancePanel({ assets, records, suppliers, onAddAsset, onUpdateAsse
         {assetForm.category === 'bebedouro' ? <Field label="Intervalo troca de filtro (dias)"><input type="number" min="1" step="1" value={assetForm.filterIntervalDays} onChange={(e) => setAssetForm({ ...assetForm, filterIntervalDays: e.target.value })} /></Field> : null}
         {assetForm.category === 'impressora' ? <Field label="Cartuchos / Tintas"><input value={assetForm.inkColors} onChange={(e) => setAssetForm({ ...assetForm, inkColors: e.target.value })} placeholder="Ex: C, M, Y, K, PBK" /></Field> : null}
         {assetForm.category === 'piscina' ? <Field label="Volume da piscina"><input value={assetForm.poolVolume} onChange={(e) => setAssetForm({ ...assetForm, poolVolume: e.target.value })} placeholder="Ex: 50.000 L" /></Field> : null}
-        {assetForm.category === 'grama' ? <Field label="Area (m2)"><input value={assetForm.areaM2} onChange={(e) => setAssetForm({ ...assetForm, areaM2: e.target.value })} placeholder="Ex: 350" /></Field> : null}
+        {assetForm.category === 'grama' ? <>
+          <Field label="Area (m2)"><input value={assetForm.areaM2} onChange={(e) => setAssetForm({ ...assetForm, areaM2: e.target.value })} placeholder="Ex: 350" /></Field>
+          <Field label="Intervalo aplicação herbicida (dias)"><input type="number" min="1" step="1" value={assetForm.herbicideIntervalDays} onChange={(e) => setAssetForm({ ...assetForm, herbicideIntervalDays: e.target.value })} /></Field>
+          <Field label="Última aplicação de herbicida"><input type="date" value={assetForm.lastHerbicideDate || ''} onChange={(e) => setAssetForm({ ...assetForm, lastHerbicideDate: e.target.value })} /></Field>
+        </> : null}
         <Field label="Observações"><textarea rows="2" value={assetForm.notes} onChange={(e) => setAssetForm({ ...assetForm, notes: e.target.value })} /></Field>
       </div>
       <div className="actions-row" style={{ marginTop: '16px' }}>
@@ -2472,8 +2492,18 @@ function MaintenancePanel({ assets, records, suppliers, onAddAsset, onUpdateAsse
     {showRecordModal !== null ? <div className="modal-overlay"><div className="modal-content" style={{ maxWidth: '560px' }}>
       <div className="panel-head"><div><h3>Registrar manutenção</h3><p>{assets.find((a) => a.id === showRecordModal)?.name}</p></div></div>
       <div className="form-grid">
-        <Field label="Data"><input type="date" value={recordForm.date} onChange={(e) => setRecordForm({ ...recordForm, date: e.target.value })} /></Field>
-        <Field label="Tipo"><select value={recordForm.type} onChange={(e) => setRecordForm({ ...recordForm, type: e.target.value })}>{MAINT_RECORD_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select></Field>
+        <Field label="Data"><input type="date" value={recordForm.date} onChange={(e) => {
+          const date = e.target.value;
+          const asset = assets.find((a) => a.id === showRecordModal);
+          const nextAuto = recordForm.type === 'aplicacao_herbicida' && date && asset ? new Date(new Date(date).getTime() + Number(asset.herbicideIntervalDays || 30) * 86400000).toISOString().slice(0,10) : recordForm.nextApplicationDate;
+          setRecordForm({ ...recordForm, date, nextApplicationDate: nextAuto });
+        }} /></Field>
+        <Field label="Tipo"><select value={recordForm.type} onChange={(e) => {
+          const type = e.target.value;
+          const asset = assets.find((a) => a.id === showRecordModal);
+          const nextAuto = type === 'aplicacao_herbicida' && recordForm.date && asset ? new Date(new Date(recordForm.date).getTime() + Number(asset.herbicideIntervalDays || 30) * 86400000).toISOString().slice(0,10) : '';
+          setRecordForm({ ...recordForm, type, nextApplicationDate: nextAuto });
+        }}>{MAINT_RECORD_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select></Field>
         <Field label="Descrição"><input value={recordForm.description} onChange={(e) => setRecordForm({ ...recordForm, description: e.target.value })} placeholder="O que foi feito" /></Field>
         <Field label="Técnico / Empresa"><input value={recordForm.technician} onChange={(e) => setRecordForm({ ...recordForm, technician: e.target.value })} /></Field>
         <Field label="Custo (R$)"><input type="number" min="0" step="0.01" value={recordForm.cost} onChange={(e) => setRecordForm({ ...recordForm, cost: e.target.value })} /></Field>
@@ -2523,14 +2553,20 @@ function MaintenancePanel({ assets, records, suppliers, onAddAsset, onUpdateAsse
         <div className="table-wrap"><table><thead><tr><th>Tipo</th><th>Equipamento</th><th>Local</th><th>Última manutenção</th><th>Próxima manutenção</th><th>Intervalo</th><th>Fornecedor</th><th>Status</th><th></th></tr></thead><tbody>
           {filtered.sort((a, b) => { const so = { overdue: 0, due: 1, ok: 2 }; return so[assetStatus(a)] - so[assetStatus(b)] || a.name.localeCompare(b.name); }).map((a) => {
             const st = assetStatus(a); const dl = assetDaysLeft(a); const nd = assetNextDate(a);
+            const isGrama = a.category === 'grama';
+            const hNd = isGrama ? assetHerbicideNextDate(a) : null;
+            const hDl = isGrama ? assetHerbicideDaysLeft(a) : null;
             const sup = suppliers.find((s) => s.id === a.supplierId);
             return <tr key={a.id}>
               <td>{catInfo(a.category).icon} <span style={{ fontSize: '12px', color: 'var(--muted)' }}>{catInfo(a.category).label}</span></td>
               <td><strong>{a.name}</strong>{a.brand || a.model ? <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{[a.brand, a.model].filter(Boolean).join(' - ')}</div> : null}{a.serialNumber ? <div style={{ fontSize: '11px', color: 'var(--muted)' }}>S/N: {a.serialNumber}</div> : null}</td>
               <td>{a.location || <span style={{ color: 'var(--muted)' }}>--</span>}</td>
-              <td>{a.lastMaintenanceDate ? formatDate(a.lastMaintenanceDate) : <span style={{ color: 'var(--muted)' }}>Não registrada</span>}</td>
-              <td>{nd ? <><div>{formatDate(nd)}</div><div style={{ fontSize: '12px', color: dl <= 0 ? 'var(--danger)' : dl <= 14 ? 'var(--warn)' : 'var(--muted)' }}>{dl <= 0 ? `${Math.abs(dl)} dias atrás` : `em ${dl} dias`}</div></> : <span style={{ color: 'var(--muted)' }}>--</span>}</td>
-              <td>{a.intervalDays} dias</td>
+              <td>{a.lastMaintenanceDate ? <div>{formatDate(a.lastMaintenanceDate)}{isGrama ? <div style={{ fontSize: '11px', color: 'var(--muted)' }}>corte</div> : null}</div> : <span style={{ color: 'var(--muted)' }}>Não registrada</span>}{isGrama && a.lastHerbicideDate ? <div style={{ marginTop: '4px' }}>{formatDate(a.lastHerbicideDate)}<div style={{ fontSize: '11px', color: 'var(--muted)' }}>herbicida</div></div> : null}</td>
+              <td>
+                {nd ? <div>{formatDate(nd)}<div style={{ fontSize: '12px', color: dl <= 0 ? 'var(--danger)' : dl <= 14 ? 'var(--warn)' : 'var(--muted)' }}>{isGrama ? 'corte · ' : ''}{dl <= 0 ? `${Math.abs(dl)} dias atrás` : `em ${dl} dias`}</div></div> : <span style={{ color: 'var(--muted)' }}>--</span>}
+                {isGrama && hNd ? <div style={{ marginTop: '4px' }}>{formatDate(hNd)}<div style={{ fontSize: '12px', color: hDl <= 0 ? 'var(--danger)' : hDl <= 14 ? 'var(--warn)' : 'var(--muted)' }}>herbicida · {hDl <= 0 ? `${Math.abs(hDl)} dias atrás` : `em ${hDl} dias`}</div></div> : null}
+              </td>
+              <td>{a.intervalDays} dias{isGrama && a.herbicideIntervalDays ? <div style={{ fontSize: '11px', color: 'var(--muted)' }}>herb: {a.herbicideIntervalDays} dias</div> : null}</td>
               <td>{sup ? sup.name : a.supplierName || <span style={{ color: 'var(--muted)' }}>--</span>}</td>
               <td><span className={`badge ${statusTone(st)}`}>{statusLabel(st)}</span></td>
               <td><div className="table-actions">

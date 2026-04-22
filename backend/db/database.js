@@ -180,6 +180,11 @@ function ensureColumn(tableName, columnName, definition) {
 ensureColumn('items', 'createdByReceiptId', 'INTEGER REFERENCES receipts(id) ON DELETE SET NULL');
 ensureColumn('movements', 'receiptId', 'INTEGER REFERENCES receipts(id) ON DELETE SET NULL');
 ensureColumn('price_history', 'receiptId', 'INTEGER REFERENCES receipts(id) ON DELETE SET NULL');
+ensureColumn('maintenance_assets', 'herbicideIntervalDays', "INTEGER DEFAULT 30");
+ensureColumn('maintenance_assets', 'lastHerbicideDate', "TEXT DEFAULT ''");
+ensureColumn('maintenance_records', 'herbicideProduct', "TEXT DEFAULT ''");
+ensureColumn('maintenance_records', 'herbicideQuantity', "TEXT DEFAULT ''");
+ensureColumn('maintenance_records', 'nextApplicationDate', "TEXT DEFAULT ''");
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_items_created_by_receipt ON items(createdByReceiptId);
