@@ -22,8 +22,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Gera o build do frontend se nao existir
+:: Decide se precisa rebuildar o frontend
+set "NEED_BUILD=0"
 if not exist "%ROOT%\dist\index.html" (
+    set "NEED_BUILD=1"
+) else (
+    :: Verifica se algum arquivo em src/ e mais novo que o build atual
+    powershell -NoProfile -Command "$dist = (Get-Item '%ROOT%\dist\index.html').LastWriteTime; $srcLatest = (Get-ChildItem -Path '%ROOT%\src','%ROOT%\index.html','%ROOT%\vite.config.js','%ROOT%\package.json' -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime; if ($srcLatest -gt $dist) { exit 1 } else { exit 0 }"
+    if errorlevel 1 set "NEED_BUILD=1"
+)
+
+if "%NEED_BUILD%"=="1" (
     echo  [INFO] Gerando build do frontend...
     cd /d "%ROOT%"
     call node_modules\.bin\vite.cmd build
@@ -33,6 +42,8 @@ if not exist "%ROOT%\dist\index.html" (
         exit /b 1
     )
     echo  [OK] Build gerado com sucesso.
+) else (
+    echo  [OK] Build do frontend esta atualizado.
 )
 
 :: Abre o navegador apos 3 segundos (em segundo plano)
