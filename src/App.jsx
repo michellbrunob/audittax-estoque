@@ -2329,6 +2329,7 @@ const MAINT_RECORD_TYPES = [
   { value: 'troca_tinta', label: 'Troca de Tinta' },
   { value: 'recarga', label: 'Recarga' },
   { value: 'substituição', label: 'Substituicao' },
+  { value: 'aplicacao_herbicida', label: 'Aplicação de herbicida' },
 ];
 const INVENTORY_FISCAL_CLASSES = [
   { value: 'processamento_dados', label: 'Proc. de dados', annualRate: 20, residualRate: 10, usefulLifeYears: 5, note: 'Equipamentos de processamento de dados' },
@@ -2406,7 +2407,7 @@ function MaintenancePanel({ assets, records, suppliers, onAddAsset, onUpdateAsse
   const [confirmSave, setConfirmSave] = React.useState(null); // { id, payload }
 
   const emptyAsset = { category: 'ac', name: '', location: '', brand: '', model: '', serialNumber: '', supplierId: '', supplierName: '', intervalDays: 180, lastMaintenanceDate: '', notes: '', btuCapacity: '', acType: 'Split', inkColors: 'C,M,Y,K', poolVolume: '', areaM2: '', filterIntervalDays: 180 };
-  const emptyRecord = { assetId: '', date: new Date().toISOString().slice(0,10), type: 'preventiva', description: '', cost: '', technician: '', supplierId: '', notes: '' };
+  const emptyRecord = { assetId: '', date: new Date().toISOString().slice(0,10), type: 'preventiva', description: '', cost: '', technician: '', supplierId: '', notes: '', herbicideProduct: '', herbicideQuantity: '', nextApplicationDate: '' };
 
   const [assetForm, setAssetForm] = React.useState(emptyAsset);
   const [recordForm, setRecordForm] = React.useState(emptyRecord);
@@ -2477,6 +2478,11 @@ function MaintenancePanel({ assets, records, suppliers, onAddAsset, onUpdateAsse
         <Field label="Técnico / Empresa"><input value={recordForm.technician} onChange={(e) => setRecordForm({ ...recordForm, technician: e.target.value })} /></Field>
         <Field label="Custo (R$)"><input type="number" min="0" step="0.01" value={recordForm.cost} onChange={(e) => setRecordForm({ ...recordForm, cost: e.target.value })} /></Field>
         <Field label="Fornecedor (catálogo)"><select value={recordForm.supplierId} onChange={(e) => setRecordForm({ ...recordForm, supplierId: e.target.value })}><option value="">-- nenhum --</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
+        {recordForm.type === 'aplicacao_herbicida' ? <>
+          <Field label="Produto aplicado"><input value={recordForm.herbicideProduct} onChange={(e) => setRecordForm({ ...recordForm, herbicideProduct: e.target.value })} placeholder="Ex: Mata-mato XYZ" /></Field>
+          <Field label="Quantidade utilizada"><input value={recordForm.herbicideQuantity} onChange={(e) => setRecordForm({ ...recordForm, herbicideQuantity: e.target.value })} placeholder="Ex: 500 ml ou 2 L" /></Field>
+          <Field label="Próxima aplicação prevista"><input type="date" value={recordForm.nextApplicationDate} onChange={(e) => setRecordForm({ ...recordForm, nextApplicationDate: e.target.value })} /></Field>
+        </> : null}
         <Field label="Observações"><textarea rows="2" value={recordForm.notes} onChange={(e) => setRecordForm({ ...recordForm, notes: e.target.value })} /></Field>
       </div>
       <div className="actions-row" style={{ marginTop: '16px' }}>
