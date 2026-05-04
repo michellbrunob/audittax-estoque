@@ -1120,20 +1120,24 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: err.message || 'Erro interno no servidor.' });
 });
 
-initDatabase()
-  .then(() => {
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`\nâ•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—`);
-      console.log(`â•‘  Audittax â€” Gestão Integrada           â•‘`);
-      console.log(`â•‘  http://localhost:${PORT}                   â•‘`);
-      console.log(`â•‘  API REST + Frontend prontos             â•‘`);
-      console.log(`â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n`);
+if (require.main === module) {
+  initDatabase()
+    .then(() => {
+      app.listen(PORT, '0.0.0.0', () => {
+        console.log(`\nâ•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—`);
+        console.log(`â•‘  Audittax â€” Gestão Integrada           â•‘`);
+        console.log(`â•‘  http://localhost:${PORT}                   â•‘`);
+        console.log(`â•‘  API REST + Frontend prontos             â•‘`);
+        console.log(`â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n`);
+      });
+    })
+    .catch((error) => {
+      console.error('Falha ao inicializar banco Supabase/Postgres:', error);
+      process.exit(1);
     });
-  })
-  .catch((error) => {
-    console.error('Falha ao inicializar banco Supabase/Postgres:', error);
-    process.exit(1);
-  });
+}
+
+module.exports = app;
 
 
 
