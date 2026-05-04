@@ -9,9 +9,19 @@ const path = require('path');
 const { spawn } = require('child_process');
 const sharp = require('sharp');
 const jsQR = require('jsqr');
-const tesseract = require('node-tesseract-ocr');
 const pdfParse = require('pdf-parse');
-const pdfPoppler = require('pdf-poppler');
+
+function requireOptional(moduleName) {
+  try {
+    return require(moduleName);
+  } catch (error) {
+    console.warn(`[optional] ${moduleName} indisponivel:`, error.message);
+    return null;
+  }
+}
+
+const tesseract = requireOptional('node-tesseract-ocr');
+const pdfPoppler = requireOptional('pdf-poppler');
 
 let readBarcodes;
 const zxingReady = import('zxing-wasm/reader').then((mod) => {
@@ -455,6 +465,10 @@ async function lerQrCodeDaImagem(bufferImagem) {
 }
 
 async function executarOCR(bufferImagem) {
+  if (!tesseract) {
+    throw new Error('node-tesseract-ocr indisponivel neste ambiente.');
+  }
+
   const metadata = await sharp(bufferImagem).metadata();
   const { width, height } = metadata;
 
@@ -485,6 +499,10 @@ async function extrairTextoPdf(bufferPdf) {
 }
 
 async function converterPdfParaImagem(caminhoPdf) {
+  if (!pdfPoppler) {
+    throw new Error('pdf-poppler indisponivel neste ambiente.');
+  }
+
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nfce-pdf-'));
 
   const options = {
