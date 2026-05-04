@@ -10,7 +10,10 @@ const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const RECEIPTS_BUCKET = process.env.SUPABASE_RECEIPTS_BUCKET || 'receipts';
 
-fs.mkdirSync(RECEIPTS_DIR, { recursive: true });
+const canWriteLocalStorage = process.env.VERCEL !== '1';
+if (canWriteLocalStorage) {
+  fs.mkdirSync(RECEIPTS_DIR, { recursive: true });
+}
 
 const storageEnabled = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
 
