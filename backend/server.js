@@ -920,6 +920,7 @@ app.post('/nfce/upload', upload.single('file'), async (req, res) => {
 // REST API â€” PersistÃªncia SQLite
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const Q = require('./db/queries.js');
+const { initDatabase } = require('./db/database.js');
 const { RECEIPTS_DIR } = Q;
 const receiptUpload = multer({ storage: multer.diskStorage({
   destination: (_, __, cb) => cb(null, RECEIPTS_DIR),
@@ -936,105 +937,160 @@ function toStoredFile(file, label = '') {
   };
 }
 
+const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+
 // Estado completo (carga inicial)
-app.get('/api/state', (_, res) => { try { res.json(Q.getFullState()); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get('/api/state', asyncRoute(async (_, res) => {
+  res.json(await Q.getFullState());
+}));
 
 // MigraÃ§Ã£o do localStorage
-app.post('/api/migrate', (req, res) => { try { const result = Q.migrateFromLocalStorage(req.body); res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post('/api/migrate', asyncRoute(async (req, res) => {
+  res.json(await Q.migrateFromLocalStorage(req.body));
+}));
 
 // â”€â”€â”€ Items â”€â”€â”€
-app.get('/api/items', (_, res) => res.json(Q.getAllItems()));
-app.post('/api/items', (req, res) => { try { res.json(Q.insertItem(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.put('/api/items/:id', (req, res) => { try { res.json(Q.updateItem(Number(req.params.id), req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.delete('/api/items/:id', (req, res) => { try { Q.deleteItem(Number(req.params.id)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.patch('/api/items/:id/consumption', (req, res) => { try { Q.updateItemConsumption(Number(req.params.id), Number(req.body.weeklyConsumption)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/items', asyncRoute(async (_, res) => res.json(await Q.getAllItems())));
+app.post('/api/items', asyncRoute(async (req, res) => {
+  try { res.json(await Q.insertItem(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.put('/api/items/:id', asyncRoute(async (req, res) => {
+  try { res.json(await Q.updateItem(Number(req.params.id), req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.delete('/api/items/:id', asyncRoute(async (req, res) => {
+  try { await Q.deleteItem(Number(req.params.id)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.patch('/api/items/:id/consumption', asyncRoute(async (req, res) => {
+  try { await Q.updateItemConsumption(Number(req.params.id), Number(req.body.weeklyConsumption)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
 
 // â”€â”€â”€ Movements â”€â”€â”€
-app.get('/api/movements', (_, res) => res.json(Q.getAllMovements()));
-app.post('/api/movements', (req, res) => { try { res.json(Q.insertMovement(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/movements', asyncRoute(async (_, res) => res.json(await Q.getAllMovements())));
+app.post('/api/movements', asyncRoute(async (req, res) => {
+  try { res.json(await Q.insertMovement(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
 
 // â”€â”€â”€ Prices â”€â”€â”€
-app.get('/api/prices', (_, res) => res.json(Q.getAllPrices()));
-app.post('/api/prices', (req, res) => { try { res.json(Q.insertPrice(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/prices', asyncRoute(async (_, res) => res.json(await Q.getAllPrices())));
+app.post('/api/prices', asyncRoute(async (req, res) => {
+  try { res.json(await Q.insertPrice(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
 
 // â”€â”€â”€ Extra Purchases â”€â”€â”€
-app.get('/api/extras', (_, res) => res.json(Q.getAllExtras()));
-app.post('/api/extras', (req, res) => { try { res.json(Q.insertExtra(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/extras', asyncRoute(async (_, res) => res.json(await Q.getAllExtras())));
+app.post('/api/extras', asyncRoute(async (req, res) => {
+  try { res.json(await Q.insertExtra(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
 
 // â”€â”€â”€ Receipts â”€â”€â”€
-app.get('/api/receipts', (_, res) => res.json(Q.getAllReceipts()));
-app.post('/api/receipts', receiptUpload.single('file'), (req, res) => {
+app.get('/api/receipts', asyncRoute(async (_, res) => res.json(await Q.getAllReceipts())));
+app.post('/api/receipts', receiptUpload.single('file'), asyncRoute(async (req, res) => {
   try {
     const data = req.body.data ? JSON.parse(req.body.data) : req.body;
     const filePath = req.file ? req.file.filename : '';
-    res.json(Q.insertReceipt(data, filePath));
+    res.json(await Q.insertReceipt(data, filePath));
   } catch (e) { res.status(400).json({ error: e.message }); }
-});
-app.get('/api/receipts/:id/file', (req, res) => {
+}));
+app.get('/api/receipts/:id/file', asyncRoute(async (req, res) => {
   try {
-    const receipt = Q.getReceipt(Number(req.params.id));
+    const receipt = await Q.getReceipt(Number(req.params.id));
     if (!receipt?.filePath) return res.status(404).json({ error: 'Arquivo nao encontrado' });
     const fullPath = path.join(RECEIPTS_DIR, receipt.filePath);
     if (!require('fs').existsSync(fullPath)) return res.status(404).json({ error: 'Arquivo nao existe em disco' });
     res.setHeader('Content-Type', receipt.mimeType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${receipt.fileName || 'comprovante'}"`);
-    res.sendFile(fullPath);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.get('/api/receipts/:receiptId/files/:fileId', (req, res) => {
+    return res.sendFile(fullPath);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+}));
+app.get('/api/receipts/:receiptId/files/:fileId', asyncRoute(async (req, res) => {
   try {
-    const attachment = Q.getReceiptAttachment(Number(req.params.receiptId), Number(req.params.fileId));
+    const attachment = await Q.getReceiptAttachment(Number(req.params.receiptId), Number(req.params.fileId));
     if (!attachment?.filePath) return res.status(404).json({ error: 'Arquivo complementar nao encontrado' });
     const fullPath = path.join(RECEIPTS_DIR, attachment.filePath);
     if (!require('fs').existsSync(fullPath)) return res.status(404).json({ error: 'Arquivo nao existe em disco' });
     res.setHeader('Content-Type', attachment.mimeType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${attachment.fileName || 'anexo'}"`);
-    res.sendFile(fullPath);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.delete('/api/receipts/:id', (req, res) => {
+    return res.sendFile(fullPath);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+}));
+app.delete('/api/receipts/:id', asyncRoute(async (req, res) => {
   try {
     const mode = req.query.mode === 'revert-import' ? 'revert-import' : 'receipt-only';
-    res.json(Q.deleteReceipt(Number(req.params.id), mode));
+    res.json(await Q.deleteReceipt(Number(req.params.id), mode));
   } catch (e) { res.status(400).json({ error: e.message }); }
-});
+}));
 
 // â”€â”€â”€ Suppliers â”€â”€â”€
-app.get('/api/suppliers', (_, res) => res.json(Q.getAllSuppliers()));
-app.post('/api/suppliers', (req, res) => { try { res.json(Q.insertSupplier(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.put('/api/suppliers/:id', (req, res) => { try { res.json(Q.updateSupplier(Number(req.params.id), req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.delete('/api/suppliers/:id', (req, res) => { try { const r = Q.deleteSupplier(Number(req.params.id)); if (r.error) return res.status(409).json(r); res.json(r); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/suppliers', asyncRoute(async (_, res) => res.json(await Q.getAllSuppliers())));
+app.post('/api/suppliers', asyncRoute(async (req, res) => {
+  try { res.json(await Q.insertSupplier(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.put('/api/suppliers/:id', asyncRoute(async (req, res) => {
+  try { res.json(await Q.updateSupplier(Number(req.params.id), req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.delete('/api/suppliers/:id', asyncRoute(async (req, res) => {
+  try {
+    const result = await Q.deleteSupplier(Number(req.params.id));
+    if (result.error) return res.status(409).json(result);
+    return res.json(result);
+  } catch (e) { return res.status(400).json({ error: e.message }); }
+}));
 
 // â”€â”€â”€ Cycle & Settings â”€â”€â”€
-app.put('/api/cycle', (req, res) => { try { res.json(Q.updateCycle(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.put('/api/settings', (req, res) => { try { res.json(Q.updateSettings(req.body)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.put('/api/cycle', asyncRoute(async (req, res) => {
+  try { res.json(await Q.updateCycle(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.put('/api/settings', asyncRoute(async (req, res) => {
+  try { res.json(await Q.updateSettings(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
 
 // â”€â”€â”€ Maintenance â”€â”€â”€
-app.get('/api/maintenance/assets', (_, res) => { try { res.json(Q.getAllAssets()); } catch(e) { res.status(500).json({ error: e.message }); } });
-app.post('/api/maintenance/assets', (req, res) => { try { res.json(Q.insertAsset(req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
-app.put('/api/maintenance/assets/:id', (req, res) => { try { res.json(Q.updateAsset(Number(req.params.id), req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
-app.delete('/api/maintenance/assets/:id', (req, res) => { try { Q.deleteAsset(Number(req.params.id)); res.json({ ok: true }); } catch(e) { res.status(400).json({ error: e.message }); } });
-app.get('/api/maintenance/records', (_, res) => { try { res.json(Q.getAllRecords()); } catch(e) { res.status(500).json({ error: e.message }); } });
-app.post('/api/maintenance/records', (req, res) => { try { res.json(Q.insertRecord(req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
-app.delete('/api/maintenance/records/:id', (req, res) => { try { Q.deleteRecord(Number(req.params.id)); res.json({ ok: true }); } catch(e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/maintenance/assets', asyncRoute(async (_, res) => {
+  try { res.json(await Q.getAllAssets()); } catch (e) { res.status(500).json({ error: e.message }); }
+}));
+app.post('/api/maintenance/assets', asyncRoute(async (req, res) => {
+  try { res.json(await Q.insertAsset(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.put('/api/maintenance/assets/:id', asyncRoute(async (req, res) => {
+  try { res.json(await Q.updateAsset(Number(req.params.id), req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.delete('/api/maintenance/assets/:id', asyncRoute(async (req, res) => {
+  try { await Q.deleteAsset(Number(req.params.id)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.get('/api/maintenance/records', asyncRoute(async (_, res) => {
+  try { res.json(await Q.getAllRecords()); } catch (e) { res.status(500).json({ error: e.message }); }
+}));
+app.post('/api/maintenance/records', asyncRoute(async (req, res) => {
+  try { res.json(await Q.insertRecord(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.delete('/api/maintenance/records/:id', asyncRoute(async (req, res) => {
+  try { await Q.deleteRecord(Number(req.params.id)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
 
 // â”€â”€â”€ Batch Import (confirmReaderImport) â”€â”€â”€
 // ─── IT Inventory ───
-app.get('/api/inventory/assets', (_, res) => { try { res.json(Q.getAllInventoryAssets()); } catch(e) { res.status(500).json({ error: e.message }); } });
-app.post('/api/inventory/assets', (req, res) => { try { res.json(Q.insertInventoryAsset(req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
-app.put('/api/inventory/assets/:id', (req, res) => { try { res.json(Q.updateInventoryAsset(Number(req.params.id), req.body)); } catch(e) { res.status(400).json({ error: e.message }); } });
-app.delete('/api/inventory/assets/:id', (req, res) => { try { Q.deleteInventoryAsset(Number(req.params.id)); res.json({ ok: true }); } catch(e) { res.status(400).json({ error: e.message }); } });
-app.post('/api/import-receipt', receiptUpload.fields([{ name: 'primaryFile', maxCount: 1 }, { name: 'attachmentFile', maxCount: 1 }]), (req, res) => {
+app.get('/api/inventory/assets', asyncRoute(async (_, res) => {
+  try { res.json(await Q.getAllInventoryAssets()); } catch (e) { res.status(500).json({ error: e.message }); }
+}));
+app.post('/api/inventory/assets', asyncRoute(async (req, res) => {
+  try { res.json(await Q.insertInventoryAsset(req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.put('/api/inventory/assets/:id', asyncRoute(async (req, res) => {
+  try { res.json(await Q.updateInventoryAsset(Number(req.params.id), req.body)); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.delete('/api/inventory/assets/:id', asyncRoute(async (req, res) => {
+  try { await Q.deleteInventoryAsset(Number(req.params.id)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.post('/api/import-receipt', receiptUpload.fields([{ name: 'primaryFile', maxCount: 1 }, { name: 'attachmentFile', maxCount: 1 }]), asyncRoute(async (req, res) => {
   try {
     const data = req.body.data ? JSON.parse(req.body.data) : req.body;
     const primaryFile = toStoredFile(req.files?.primaryFile?.[0]);
     const attachmentFile = toStoredFile(req.files?.attachmentFile?.[0]);
-    const result = Q.batchImportReceipt(data, primaryFile, attachmentFile ? [attachmentFile] : []);
-    // Retorna estado atualizado junto com resultado
-    result.state = Q.getFullState();
+    const result = await Q.batchImportReceipt(data, primaryFile, attachmentFile ? [attachmentFile] : []);
+    result.state = await Q.getFullState();
     res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }
-});
+}));
 
 // Serve o frontend buildado (dist/) â€” acesse http://localhost:PORT
 const DIST_DIR = path.join(__dirname, '..', 'dist');
@@ -1044,13 +1100,25 @@ if (require('fs').existsSync(DIST_DIR)) {
   app.get('*', (_, res) => res.sendFile(path.join(DIST_DIR, 'index.html')));
 }
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\nâ•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—`);
-  console.log(`â•‘  Audittax â€” Gestão Integrada           â•‘`);
-  console.log(`â•‘  http://localhost:${PORT}                   â•‘`);
-  console.log(`â•‘  API REST + Frontend prontos             â•‘`);
-  console.log(`â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n`);
+app.use((err, _req, res, _next) => {
+  console.error(err);
+  res.status(500).json({ error: err.message || 'Erro interno no servidor.' });
 });
+
+initDatabase()
+  .then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`\nâ•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—`);
+      console.log(`â•‘  Audittax â€” Gestão Integrada           â•‘`);
+      console.log(`â•‘  http://localhost:${PORT}                   â•‘`);
+      console.log(`â•‘  API REST + Frontend prontos             â•‘`);
+      console.log(`â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n`);
+    });
+  })
+  .catch((error) => {
+    console.error('Falha ao inicializar banco Supabase/Postgres:', error);
+    process.exit(1);
+  });
 
 
 

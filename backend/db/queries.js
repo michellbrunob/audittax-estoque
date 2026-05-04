@@ -1,158 +1,255 @@
-const { db, RECEIPTS_DIR } = require('./database.js');
 const fs = require('fs');
 const path = require('path');
+const { query, withTransaction, RECEIPTS_DIR } = require('./database.js');
 
-// ─── Helpers ───
-const bool = (v) => (v ? 1 : 0);
-const unbool = (v) => v === 1;
+const bool = (value) => value !== false;
+const toNumber = (value, fallback = 0) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
 
-// ─── Items ───
-const stmtAllItems = db.prepare('SELECT * FROM items ORDER BY name');
-const stmtGetItem = db.prepare('SELECT * FROM items WHERE id = ?');
-const stmtInsertItem = db.prepare('INSERT INTO items (name, unit, quantity, minStock, weeklyConsumption, createdByReceiptId) VALUES (@name, @unit, @quantity, @minStock, @weeklyConsumption, @createdByReceiptId)');
-const stmtUpdateItem = db.prepare('UPDATE items SET name=@name, unit=@unit, quantity=@quantity, minStock=@minStock, weeklyConsumption=@weeklyConsumption WHERE id=@id');
-const stmtDeleteItem = db.prepare('DELETE FROM items WHERE id = ?');
-const stmtUpdateItemQty = db.prepare('UPDATE items SET quantity = @quantity WHERE id = @id');
-const stmtUpdateItemConsumption = db.prepare('UPDATE items SET weeklyConsumption = @weeklyConsumption WHERE id = @id');
+const normalizeItem = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  quantity: toNumber(row.quantity),
+  minStock: toNumber(row.minStock),
+  weeklyConsumption: toNumber(row.weeklyConsumption),
+  createdByReceiptId: row.createdByReceiptId == null ? null : Number(row.createdByReceiptId),
+}) : null;
 
-const getAllItems = () => stmtAllItems.all();
-const getItem = (id) => stmtGetItem.get(id);
-const insertItem = (p) => {
-  const r = stmtInsertItem.run({
-    name: p.name || '',
-    unit: p.unit || 'un',
-    quantity: Number(p.quantity || 0),
-    minStock: Number(p.minStock || 0),
-    weeklyConsumption: Number(p.weeklyConsumption || 0),
-    createdByReceiptId: p.createdByReceiptId || null,
+const normalizeMovement = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  itemId: Number(row.itemId),
+  quantity: toNumber(row.quantity),
+  receiptId: row.receiptId == null ? null : Number(row.receiptId),
+}) : null;
+
+const normalizePrice = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  itemId: Number(row.itemId),
+  supplierId: row.supplierId == null ? null : Number(row.supplierId),
+  price: toNumber(row.price),
+  receiptId: row.receiptId == null ? null : Number(row.receiptId),
+}) : null;
+
+const normalizeExtra = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  itemId: Number(row.itemId),
+  quantity: toNumber(row.quantity),
+  cost: toNumber(row.cost),
+  supplierId: row.supplierId == null ? null : Number(row.supplierId),
+}) : null;
+
+const normalizeSupplier = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  active: Boolean(row.active),
+}) : null;
+
+const normalizeReceipt = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  value: toNumber(row.value),
+  supplierId: row.supplierId == null ? null : Number(row.supplierId),
+}) : null;
+
+const normalizeReceiptFile = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  receiptId: Number(row.receiptId),
+}) : null;
+
+const normalizeCycle = (row) => row ? ({
+  lastPurchaseDate: row.lastPurchaseDate || '',
+  intervalDays: toNumber(row.intervalDays, 60),
+}) : { lastPurchaseDate: '', intervalDays: 60 };
+
+const normalizeSettings = (row) => row ? ({
+  anthropicApiKey: row.anthropicApiKey || '',
+}) : { anthropicApiKey: '' };
+
+const normalizeAsset = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  supplierId: row.supplierId == null ? null : Number(row.supplierId),
+  intervalDays: toNumber(row.intervalDays, 180),
+  filterIntervalDays: toNumber(row.filterIntervalDays, 180),
+  herbicideIntervalDays: toNumber(row.herbicideIntervalDays, 30),
+  active: Boolean(row.active),
+}) : null;
+
+const normalizeRecord = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  assetId: Number(row.assetId),
+  supplierId: row.supplierId == null ? null : Number(row.supplierId),
+  cost: toNumber(row.cost),
+}) : null;
+
+const normalizeInventoryAsset = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  purchaseCost: toNumber(row.purchaseCost),
+  stockQuantity: toNumber(row.stockQuantity, 1),
+  depreciationRate: toNumber(row.depreciationRate, 20),
+  supplierId: row.supplierId == null ? null : Number(row.supplierId),
+}) : null;
+
+async function getAllItems(client) {
+  const { rows } = await query('SELECT * FROM items ORDER BY name', [], client);
+  return rows.map(normalizeItem);
+}
+
+async function getItem(id, client) {
+  const { rows } = await query('SELECT * FROM items WHERE id = $1', [id], client);
+  return normalizeItem(rows[0]);
+}
+
+async function insertItem(payload, client) {
+  const params = [
+    payload.name || '',
+    payload.unit || 'un',
+    toNumber(payload.quantity),
+    toNumber(payload.minStock),
+    toNumber(payload.weeklyConsumption),
+    payload.createdByReceiptId || null,
+  ];
+  const { rows } = await query(`
+    INSERT INTO items (name, unit, quantity, "minStock", "weeklyConsumption", "createdByReceiptId")
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING *
+  `, params, client);
+  return normalizeItem(rows[0]);
+}
+
+async function updateItem(id, payload, client) {
+  const params = [
+    payload.name || '',
+    payload.unit || 'un',
+    toNumber(payload.quantity),
+    toNumber(payload.minStock),
+    toNumber(payload.weeklyConsumption),
+    id,
+  ];
+  await query(`
+    UPDATE items
+    SET name = $1, unit = $2, quantity = $3, "minStock" = $4, "weeklyConsumption" = $5
+    WHERE id = $6
+  `, params, client);
+  return getItem(id, client);
+}
+
+async function deleteItem(id, client) {
+  await query('DELETE FROM items WHERE id = $1', [id], client);
+}
+
+async function updateItemQty(id, quantity, client) {
+  await query('UPDATE items SET quantity = $1 WHERE id = $2', [quantity, id], client);
+}
+
+async function updateItemConsumption(id, weeklyConsumption, client) {
+  await query('UPDATE items SET "weeklyConsumption" = $1 WHERE id = $2', [weeklyConsumption, id], client);
+}
+
+async function getAllMovements(client) {
+  const { rows } = await query('SELECT * FROM movements ORDER BY date DESC, id DESC', [], client);
+  return rows.map(normalizeMovement);
+}
+
+async function insertMovement(payload) {
+  return withTransaction(async (client) => {
+    const item = await getItem(payload.itemId, client);
+    const movementDate = payload.date || new Date().toISOString().slice(0, 10);
+    const { rows } = await query(`
+      INSERT INTO movements (type, "itemId", quantity, date, notes, "receiptId")
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [
+      payload.type,
+      payload.itemId,
+      toNumber(payload.quantity),
+      movementDate,
+      payload.notes || '',
+      payload.receiptId || null,
+    ], client);
+
+    if (item) {
+      let nextQuantity = toNumber(item.quantity);
+      if (payload.type === 'entrada' || payload.type === 'avulso') {
+        nextQuantity += toNumber(payload.quantity);
+      } else if (payload.type === 'saida') {
+        nextQuantity = Math.max(0, nextQuantity - toNumber(payload.quantity));
+      }
+      await updateItemQty(payload.itemId, nextQuantity, client);
+    }
+
+    return normalizeMovement(rows[0]);
   });
-  return {
-    id: Number(r.lastInsertRowid),
-    name: p.name || '',
-    unit: p.unit || 'un',
-    quantity: Number(p.quantity || 0),
-    minStock: Number(p.minStock || 0),
-    weeklyConsumption: Number(p.weeklyConsumption || 0),
-    createdByReceiptId: p.createdByReceiptId || null,
-  };
-};
-const updateItem = (id, p) => {
-  stmtUpdateItem.run({ id, name: p.name, unit: p.unit, quantity: Number(p.quantity || 0), minStock: Number(p.minStock || 0), weeklyConsumption: Number(p.weeklyConsumption || 0) });
-  return getItem(id);
-};
-const deleteItem = (id) => stmtDeleteItem.run(id);
-const updateItemQty = (id, qty) => stmtUpdateItemQty.run({ id, quantity: qty });
-const updateItemConsumption = (id, wc) => stmtUpdateItemConsumption.run({ id, weeklyConsumption: wc });
+}
 
-// ─── Movements ───
-const stmtAllMovements = db.prepare('SELECT * FROM movements ORDER BY date DESC, id DESC');
-const stmtInsertMovement = db.prepare('INSERT INTO movements (type, itemId, quantity, date, notes, receiptId) VALUES (@type, @itemId, @quantity, @date, @notes, @receiptId)');
+async function getAllPrices(client) {
+  const { rows } = await query('SELECT * FROM price_history ORDER BY date DESC, id DESC', [], client);
+  return rows.map(normalizePrice);
+}
 
-const getAllMovements = () => stmtAllMovements.all();
-const insertMovement = (p) => {
-  const r = stmtInsertMovement.run({
-    type: p.type,
-    itemId: p.itemId,
-    quantity: Number(p.quantity),
-    date: p.date || new Date().toISOString().slice(0, 10),
-    notes: p.notes || '',
-    receiptId: p.receiptId || null,
-  });
-  const item = getItem(p.itemId);
-  if (item) {
-    let newQty = item.quantity;
-    if (p.type === 'entrada') newQty += Number(p.quantity);
-    else if (p.type === 'saida') newQty = Math.max(0, newQty - Number(p.quantity));
-    else if (p.type === 'avulso') newQty += Number(p.quantity);
-    updateItemQty(p.itemId, newQty);
-  }
-  return {
-    id: Number(r.lastInsertRowid),
-    type: p.type,
-    itemId: p.itemId,
-    quantity: Number(p.quantity),
-    date: p.date || new Date().toISOString().slice(0, 10),
-    notes: p.notes || '',
-    receiptId: p.receiptId || null,
-  };
-};
+async function insertPrice(payload, client) {
+  const { rows } = await query(`
+    INSERT INTO price_history ("itemId", "supplierId", market, price, date, "receiptId")
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING *
+  `, [
+    payload.itemId,
+    payload.supplierId || null,
+    payload.market || '',
+    toNumber(payload.price),
+    payload.date || new Date().toISOString().slice(0, 10),
+    payload.receiptId || null,
+  ], client);
+  return normalizePrice(rows[0]);
+}
 
-// ─── Price History ───
-const stmtAllPrices = db.prepare('SELECT * FROM price_history ORDER BY date DESC, id DESC');
-const stmtInsertPrice = db.prepare('INSERT INTO price_history (itemId, supplierId, market, price, date, receiptId) VALUES (@itemId, @supplierId, @market, @price, @date, @receiptId)');
+async function getAllExtras(client) {
+  const { rows } = await query('SELECT * FROM extra_purchases ORDER BY date DESC, id DESC', [], client);
+  return rows.map(normalizeExtra);
+}
 
-const getAllPrices = () => stmtAllPrices.all();
-const insertPrice = (p) => {
-  const r = stmtInsertPrice.run({
-    itemId: p.itemId,
-    supplierId: p.supplierId || null,
-    market: p.market || '',
-    price: Number(p.price),
-    date: p.date || new Date().toISOString().slice(0, 10),
-    receiptId: p.receiptId || null,
-  });
-  return {
-    id: Number(r.lastInsertRowid),
-    itemId: p.itemId,
-    supplierId: p.supplierId || null,
-    market: p.market || '',
-    price: Number(p.price),
-    date: p.date || new Date().toISOString().slice(0, 10),
-    receiptId: p.receiptId || null,
-  };
-};
+async function insertExtra(payload, client) {
+  const { rows } = await query(`
+    INSERT INTO extra_purchases ("itemId", quantity, date, cost, reason, "supplierId", location)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    RETURNING *
+  `, [
+    payload.itemId,
+    toNumber(payload.quantity),
+    payload.date || new Date().toISOString().slice(0, 10),
+    toNumber(payload.cost),
+    payload.reason || '',
+    payload.supplierId || null,
+    payload.location || '',
+  ], client);
+  return normalizeExtra(rows[0]);
+}
 
-// ─── Extra Purchases ───
-const stmtAllExtras = db.prepare('SELECT * FROM extra_purchases ORDER BY date DESC, id DESC');
-const stmtInsertExtra = db.prepare('INSERT INTO extra_purchases (itemId, quantity, date, cost, reason, supplierId, location) VALUES (@itemId, @quantity, @date, @cost, @reason, @supplierId, @location)');
-
-const getAllExtras = () => stmtAllExtras.all();
-const insertExtra = (p) => {
-  const r = stmtInsertExtra.run({ itemId: p.itemId, quantity: Number(p.quantity), date: p.date || new Date().toISOString().slice(0, 10), cost: Number(p.cost || 0), reason: p.reason || '', supplierId: p.supplierId || null, location: p.location || '' });
-  return { id: Number(r.lastInsertRowid), ...p };
-};
-
-// ─── Receipts ───
-const stmtAllReceipts = db.prepare('SELECT * FROM receipts ORDER BY date DESC, id DESC');
-const stmtGetReceipt = db.prepare('SELECT * FROM receipts WHERE id = ?');
-const stmtInsertReceipt = db.prepare('INSERT INTO receipts (title, value, date, importedAt, notes, source, supplierId, fileName, filePath, mimeType, accessKey, queryUrl) VALUES (@title, @value, @date, @importedAt, @notes, @source, @supplierId, @fileName, @filePath, @mimeType, @accessKey, @queryUrl)');
-const stmtDeleteReceipt = db.prepare('DELETE FROM receipts WHERE id = ?');
-const stmtReceiptFilesByReceipt = db.prepare('SELECT * FROM receipt_files WHERE receiptId = ? ORDER BY id');
-const stmtReceiptFileById = db.prepare('SELECT * FROM receipt_files WHERE id = ? AND receiptId = ?');
-const stmtInsertReceiptFile = db.prepare('INSERT INTO receipt_files (receiptId, kind, label, fileName, filePath, mimeType) VALUES (@receiptId, @kind, @label, @fileName, @filePath, @mimeType)');
-const stmtCountReceiptMovements = db.prepare('SELECT COUNT(*) AS total FROM movements WHERE receiptId = ?');
-const stmtCountReceiptPrices = db.prepare('SELECT COUNT(*) AS total FROM price_history WHERE receiptId = ?');
-const stmtCountReceiptCreatedItems = db.prepare('SELECT COUNT(*) AS total FROM items WHERE createdByReceiptId = ?');
-const stmtListReceiptMovements = db.prepare('SELECT id, type, itemId, quantity FROM movements WHERE receiptId = ? ORDER BY id');
-const stmtListReceiptPrices = db.prepare('SELECT id, itemId FROM price_history WHERE receiptId = ? ORDER BY id');
-const stmtListReceiptCreatedItems = db.prepare('SELECT id, name, quantity FROM items WHERE createdByReceiptId = ? ORDER BY id');
-const stmtDeleteReceiptMovements = db.prepare('DELETE FROM movements WHERE receiptId = ?');
-const stmtDeleteReceiptPrices = db.prepare('DELETE FROM price_history WHERE receiptId = ?');
-const stmtDeleteReceiptCreatedItems = db.prepare('DELETE FROM items WHERE createdByReceiptId = ?');
-const stmtCountExternalItemReferences = db.prepare(`
-  SELECT
-    (SELECT COUNT(*) FROM movements WHERE itemId = @itemId AND (receiptId IS NULL OR receiptId != @receiptId)) +
-    (SELECT COUNT(*) FROM price_history WHERE itemId = @itemId AND (receiptId IS NULL OR receiptId != @receiptId)) +
-    (SELECT COUNT(*) FROM extra_purchases WHERE itemId = @itemId) AS total
-`);
-
-function getReceiptImportSummary(receiptId) {
-  const movementCount = stmtCountReceiptMovements.get(receiptId)?.total || 0;
-  const priceCount = stmtCountReceiptPrices.get(receiptId)?.total || 0;
-  const createdItemCount = stmtCountReceiptCreatedItems.get(receiptId)?.total || 0;
+async function getReceiptImportSummary(receiptId, client) {
+  const [{ count: movementCount }, { count: priceCount }, { count: createdItemCount }] = await Promise.all([
+    query('SELECT COUNT(*)::int AS count FROM movements WHERE "receiptId" = $1', [receiptId], client).then((result) => result.rows[0]),
+    query('SELECT COUNT(*)::int AS count FROM price_history WHERE "receiptId" = $1', [receiptId], client).then((result) => result.rows[0]),
+    query('SELECT COUNT(*)::int AS count FROM items WHERE "createdByReceiptId" = $1', [receiptId], client).then((result) => result.rows[0]),
+  ]);
 
   return {
-    movementCount,
-    priceCount,
-    createdItemCount,
-    canRevertImport: movementCount > 0 || priceCount > 0 || createdItemCount > 0,
+    movementCount: Number(movementCount || 0),
+    priceCount: Number(priceCount || 0),
+    createdItemCount: Number(createdItemCount || 0),
+    canRevertImport: Number(movementCount || 0) > 0 || Number(priceCount || 0) > 0 || Number(createdItemCount || 0) > 0,
   };
 }
 
-function hydrateReceipt(receipt) {
-  if (!receipt) {
-    return null;
-  }
+async function hydrateReceipt(receipt, client) {
+  if (!receipt) return null;
 
   const attachments = [];
   if (receipt.filePath) {
@@ -168,63 +265,98 @@ function hydrateReceipt(receipt) {
     });
   }
 
-  stmtReceiptFilesByReceipt.all(receipt.id).forEach((file) => {
-    attachments.push({
-      ...file,
-      isPrimary: false,
-    });
+  const fileResult = await query('SELECT * FROM receipt_files WHERE "receiptId" = $1 ORDER BY id', [receipt.id], client);
+  fileResult.rows.map(normalizeReceiptFile).forEach((file) => {
+    attachments.push({ ...file, isPrimary: false });
   });
 
   return {
     ...receipt,
     hasFile: Boolean(receipt.filePath),
     attachments,
-    importSummary: getReceiptImportSummary(receipt.id),
+    importSummary: await getReceiptImportSummary(receipt.id, client),
   };
 }
 
-const getAllReceipts = () => stmtAllReceipts.all().map(hydrateReceipt);
-const getReceipt = (id) => hydrateReceipt(stmtGetReceipt.get(id));
-const insertReceipt = (p, filePath = '') => {
-  const r = stmtInsertReceipt.run({
-    title: p.title || '', value: Number(p.value || 0), date: p.date || new Date().toISOString().slice(0, 10),
-    importedAt: p.importedAt || new Date().toISOString(), notes: p.notes || '', source: p.source || '',
-    supplierId: p.supplierId || null, fileName: p.fileName || '', filePath: filePath || '',
-    mimeType: p.mimeType || '', accessKey: p.accessKey || '', queryUrl: p.queryUrl || ''
-  });
-  return { id: Number(r.lastInsertRowid), ...p, filePath };
-};
-function deleteReceiptFile(receipt) {
-  if (receipt?.filePath) {
-    const fullPath = path.join(RECEIPTS_DIR, receipt.filePath);
-    try { fs.unlinkSync(fullPath); } catch { /* ok */ }
-  }
+async function getAllReceipts(client) {
+  const { rows } = await query('SELECT * FROM receipts ORDER BY date DESC, id DESC', [], client);
+  const receipts = rows.map(normalizeReceipt);
+  return Promise.all(receipts.map((receipt) => hydrateReceipt(receipt, client)));
 }
 
-function deleteAttachmentFiles(receiptId) {
-  stmtReceiptFilesByReceipt.all(receiptId).forEach((file) => {
+async function getReceipt(id, client) {
+  const { rows } = await query('SELECT * FROM receipts WHERE id = $1', [id], client);
+  return hydrateReceipt(normalizeReceipt(rows[0]), client);
+}
+
+async function insertReceipt(payload, filePath = '', client) {
+  const { rows } = await query(`
+    INSERT INTO receipts (title, value, date, "importedAt", notes, source, "supplierId", "fileName", "filePath", "mimeType", "accessKey", "queryUrl")
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    RETURNING *
+  `, [
+    payload.title || '',
+    toNumber(payload.value),
+    payload.date || new Date().toISOString().slice(0, 10),
+    payload.importedAt || new Date().toISOString(),
+    payload.notes || '',
+    payload.source || '',
+    payload.supplierId || null,
+    payload.fileName || '',
+    filePath || '',
+    payload.mimeType || '',
+    payload.accessKey || '',
+    payload.queryUrl || '',
+  ], client);
+  return normalizeReceipt(rows[0]);
+}
+
+function deleteReceiptFile(receipt) {
+  if (!receipt?.filePath) return;
+  const fullPath = path.join(RECEIPTS_DIR, receipt.filePath);
+  try { fs.unlinkSync(fullPath); } catch { /* noop */ }
+}
+
+function deleteAttachmentFiles(attachments) {
+  attachments.forEach((file) => {
     if (!file?.filePath) return;
     const fullPath = path.join(RECEIPTS_DIR, file.filePath);
-    try { fs.unlinkSync(fullPath); } catch { /* ok */ }
+    try { fs.unlinkSync(fullPath); } catch { /* noop */ }
   });
 }
 
 function movementImpact(type, quantity) {
-  const amount = Number(quantity || 0);
-  if (type === 'saida') return -amount;
-  return amount;
+  const amount = toNumber(quantity);
+  return type === 'saida' ? -amount : amount;
 }
 
-const deleteReceipt = (id, mode = 'receipt-only') => {
-  const runDelete = db.transaction(() => {
-    const receipt = getReceipt(id);
+async function deleteReceipt(id, mode = 'receipt-only') {
+  const cleanup = { receipt: null, attachments: [] };
+
+  const result = await withTransaction(async (client) => {
+    const receipt = await getReceipt(id, client);
     if (!receipt) {
-      return { ok: true, mode, deletedReceiptId: id, importSummary: getReceiptImportSummary(id) };
+      return { ok: true, mode, deletedReceiptId: id, importSummary: await getReceiptImportSummary(id, client) };
     }
 
+    cleanup.receipt = receipt;
+    cleanup.attachments = receipt.attachments.filter((file) => !file.isPrimary);
+
     if (mode === 'revert-import') {
-      const linkedMovements = stmtListReceiptMovements.all(id);
-      const linkedCreatedItems = stmtListReceiptCreatedItems.all(id);
+      const linkedMovements = (await query(`
+        SELECT id, type, "itemId", quantity
+        FROM movements
+        WHERE "receiptId" = $1
+        ORDER BY id
+      `, [id], client)).rows.map(normalizeMovement);
+
+      const linkedCreatedItems = (await query(`
+        SELECT id, name, quantity
+        FROM items
+        WHERE "createdByReceiptId" = $1
+        ORDER BY id
+      `, [id], client)).rows.map(normalizeItem);
+
       const stockAdjustments = new Map();
 
       linkedMovements.forEach((movement) => {
@@ -233,245 +365,431 @@ const deleteReceipt = (id, mode = 'receipt-only') => {
       });
 
       for (const [itemId, importedDelta] of stockAdjustments.entries()) {
-        const item = getItem(itemId);
+        const item = await getItem(itemId, client);
         if (!item) continue;
-        const nextQty = Number(item.quantity || 0) - importedDelta;
+        const nextQty = toNumber(item.quantity) - importedDelta;
         if (nextQty < 0) {
           throw new Error(`Nao foi possivel reverter a importacao do item "${item.name}". O estoque atual ja foi consumido parcialmente.`);
         }
       }
 
       for (const [itemId, importedDelta] of stockAdjustments.entries()) {
-        const item = getItem(itemId);
+        const item = await getItem(itemId, client);
         if (!item) continue;
-        updateItemQty(itemId, Number((Number(item.quantity || 0) - importedDelta).toFixed(4)));
+        await updateItemQty(itemId, Number((toNumber(item.quantity) - importedDelta).toFixed(4)), client);
       }
 
-      stmtDeleteReceiptMovements.run(id);
-      stmtDeleteReceiptPrices.run(id);
+      await query('DELETE FROM movements WHERE "receiptId" = $1', [id], client);
+      await query('DELETE FROM price_history WHERE "receiptId" = $1', [id], client);
 
-      linkedCreatedItems.forEach((item) => {
-        const refs = stmtCountExternalItemReferences.get({ itemId: item.id, receiptId: id });
-        if ((refs?.total || 0) === 0) {
-          stmtDeleteItem.run(item.id);
+      for (const item of linkedCreatedItems) {
+        const { rows } = await query(`
+          SELECT (
+            (SELECT COUNT(*) FROM movements WHERE "itemId" = $1 AND ("receiptId" IS NULL OR "receiptId" != $2)) +
+            (SELECT COUNT(*) FROM price_history WHERE "itemId" = $1 AND ("receiptId" IS NULL OR "receiptId" != $2)) +
+            (SELECT COUNT(*) FROM extra_purchases WHERE "itemId" = $1)
+          )::int AS total
+        `, [item.id, id], client);
+        if (Number(rows[0]?.total || 0) === 0) {
+          await deleteItem(item.id, client);
         }
-      });
+      }
     }
 
-    deleteAttachmentFiles(id);
-    deleteReceiptFile(receipt);
-    stmtDeleteReceipt.run(id);
+    await query('DELETE FROM receipts WHERE id = $1', [id], client);
 
     return {
       ok: true,
       mode,
       deletedReceiptId: id,
-      importSummary: receipt.importSummary || getReceiptImportSummary(id),
+      importSummary: receipt.importSummary || await getReceiptImportSummary(id, client),
     };
   });
 
-  return runDelete();
-};
+  deleteAttachmentFiles(cleanup.attachments);
+  deleteReceiptFile(cleanup.receipt);
+  return result;
+}
 
-// ─── Suppliers ───
-const stmtAllSuppliers = db.prepare('SELECT * FROM suppliers ORDER BY name');
-const stmtGetSupplier = db.prepare('SELECT * FROM suppliers WHERE id = ?');
-const stmtInsertSupplier = db.prepare('INSERT INTO suppliers (name, tradeName, type, city, state, cnpj, notes, active) VALUES (@name, @tradeName, @type, @city, @state, @cnpj, @notes, @active)');
-const stmtUpdateSupplier = db.prepare('UPDATE suppliers SET name=@name, tradeName=@tradeName, type=@type, city=@city, state=@state, cnpj=@cnpj, notes=@notes, active=@active WHERE id=@id');
-const stmtDeleteSupplier = db.prepare('DELETE FROM suppliers WHERE id = ?');
-const stmtSupplierRefCount = db.prepare('SELECT (SELECT COUNT(*) FROM price_history WHERE supplierId=?) + (SELECT COUNT(*) FROM extra_purchases WHERE supplierId=?) + (SELECT COUNT(*) FROM receipts WHERE supplierId=?) AS total');
+async function getAllSuppliers(client) {
+  const { rows } = await query('SELECT * FROM suppliers ORDER BY name', [], client);
+  return rows.map(normalizeSupplier);
+}
 
-const getAllSuppliers = () => stmtAllSuppliers.all().map((s) => ({ ...s, active: unbool(s.active) }));
-const getSupplier = (id) => { const s = stmtGetSupplier.get(id); return s ? { ...s, active: unbool(s.active) } : null; };
-const insertSupplier = (p) => {
-  const r = stmtInsertSupplier.run({ name: p.name || '', tradeName: p.tradeName || '', type: p.type || '', city: p.city || '', state: p.state || '', cnpj: p.cnpj || '', notes: p.notes || '', active: bool(p.active !== false) });
-  return { id: Number(r.lastInsertRowid), name: p.name || '', tradeName: p.tradeName || '', type: p.type || '', city: p.city || '', state: p.state || '', cnpj: p.cnpj || '', notes: p.notes || '', active: p.active !== false };
-};
-const updateSupplier = (id, p) => {
-  stmtUpdateSupplier.run({ id, name: p.name || '', tradeName: p.tradeName || '', type: p.type || '', city: p.city || '', state: p.state || '', cnpj: p.cnpj || '', notes: p.notes || '', active: bool(p.active !== false) });
-  return getSupplier(id);
-};
-const deleteSupplier = (id) => {
-  const refs = stmtSupplierRefCount.get(id, id, id);
-  if (refs && refs.total > 0) return { error: 'Fornecedor tem registros vinculados', refs: refs.total };
-  stmtDeleteSupplier.run(id);
-  return { ok: true };
-};
+async function getSupplier(id, client) {
+  const { rows } = await query('SELECT * FROM suppliers WHERE id = $1', [id], client);
+  return normalizeSupplier(rows[0]);
+}
 
-// ─── Cycle ───
-const stmtGetCycle = db.prepare('SELECT * FROM cycle WHERE id = 1');
-const stmtUpdateCycle = db.prepare('UPDATE cycle SET lastPurchaseDate=@lastPurchaseDate, intervalDays=@intervalDays WHERE id=1');
+async function insertSupplier(payload, client) {
+  const { rows } = await query(`
+    INSERT INTO suppliers (name, "tradeName", type, city, state, cnpj, notes, active)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    RETURNING *
+  `, [
+    payload.name || '',
+    payload.tradeName || '',
+    payload.type || '',
+    payload.city || '',
+    payload.state || '',
+    payload.cnpj || '',
+    payload.notes || '',
+    bool(payload.active),
+  ], client);
+  return normalizeSupplier(rows[0]);
+}
 
-const getCycle = () => { const c = stmtGetCycle.get(); return c ? { lastPurchaseDate: c.lastPurchaseDate, intervalDays: c.intervalDays } : { lastPurchaseDate: '', intervalDays: 60 }; };
-const updateCycleQ = (p) => { stmtUpdateCycle.run({ lastPurchaseDate: p.lastPurchaseDate || '', intervalDays: Number(p.intervalDays || 60) }); return getCycle(); };
-
-// ─── Settings ───
-const stmtGetSettings = db.prepare('SELECT * FROM settings WHERE id = 1');
-const stmtUpdateSettings = db.prepare('UPDATE settings SET anthropicApiKey=@anthropicApiKey WHERE id=1');
-
-const getSettings = () => { const s = stmtGetSettings.get(); return s ? { anthropicApiKey: s.anthropicApiKey || '' } : { anthropicApiKey: '' }; };
-const updateSettingsQ = (p) => { stmtUpdateSettings.run({ anthropicApiKey: p.anthropicApiKey || '' }); return getSettings(); };
-
-// ─── Maintenance Assets ───
-const stmtAllAssets = db.prepare('SELECT * FROM maintenance_assets ORDER BY name');
-const stmtGetAsset = db.prepare('SELECT * FROM maintenance_assets WHERE id = ?');
-const stmtInsertAsset = db.prepare('INSERT INTO maintenance_assets (category,name,location,brand,model,serialNumber,supplierId,supplierName,intervalDays,lastMaintenanceDate,notes,btuCapacity,acType,inkColors,poolVolume,areaM2,filterIntervalDays,herbicideIntervalDays,lastHerbicideDate,active) VALUES (@category,@name,@location,@brand,@model,@serialNumber,@supplierId,@supplierName,@intervalDays,@lastMaintenanceDate,@notes,@btuCapacity,@acType,@inkColors,@poolVolume,@areaM2,@filterIntervalDays,@herbicideIntervalDays,@lastHerbicideDate,@active)');
-const stmtUpdateAsset = db.prepare('UPDATE maintenance_assets SET category=@category,name=@name,location=@location,brand=@brand,model=@model,serialNumber=@serialNumber,supplierId=@supplierId,supplierName=@supplierName,intervalDays=@intervalDays,lastMaintenanceDate=@lastMaintenanceDate,notes=@notes,btuCapacity=@btuCapacity,acType=@acType,inkColors=@inkColors,poolVolume=@poolVolume,areaM2=@areaM2,filterIntervalDays=@filterIntervalDays,herbicideIntervalDays=@herbicideIntervalDays,lastHerbicideDate=@lastHerbicideDate,active=@active WHERE id=@id');
-const stmtDeleteAsset = db.prepare('DELETE FROM maintenance_assets WHERE id = ?');
-const stmtUpdateAssetLastDate = db.prepare('UPDATE maintenance_assets SET lastMaintenanceDate=@date WHERE id=@id');
-const stmtUpdateAssetHerbicideDate = db.prepare('UPDATE maintenance_assets SET lastHerbicideDate=@date WHERE id=@id');
-
-const getAllAssets = () => stmtAllAssets.all().map((a) => ({ ...a, active: unbool(a.active) }));
-const getAsset = (id) => { const a = stmtGetAsset.get(id); return a ? { ...a, active: unbool(a.active) } : null; };
-const insertAsset = (p) => {
-  const r = stmtInsertAsset.run({ category: p.category||'outro', name: p.name||'', location: p.location||'', brand: p.brand||'', model: p.model||'', serialNumber: p.serialNumber||'', supplierId: p.supplierId||null, supplierName: p.supplierName||'', intervalDays: Number(p.intervalDays||180), lastMaintenanceDate: p.lastMaintenanceDate||'', notes: p.notes||'', btuCapacity: p.btuCapacity||'', acType: p.acType||'', inkColors: p.inkColors||'', poolVolume: p.poolVolume||'', areaM2: p.areaM2||'', filterIntervalDays: Number(p.filterIntervalDays||180), herbicideIntervalDays: Number(p.herbicideIntervalDays||30), lastHerbicideDate: p.lastHerbicideDate||'', active: bool(p.active!==false) });
-  return getAsset(Number(r.lastInsertRowid));
-};
-const updateAsset = (id, p) => {
-  stmtUpdateAsset.run({ id, category: p.category||'outro', name: p.name||'', location: p.location||'', brand: p.brand||'', model: p.model||'', serialNumber: p.serialNumber||'', supplierId: p.supplierId||null, supplierName: p.supplierName||'', intervalDays: Number(p.intervalDays||180), lastMaintenanceDate: p.lastMaintenanceDate||'', notes: p.notes||'', btuCapacity: p.btuCapacity||'', acType: p.acType||'', inkColors: p.inkColors||'', poolVolume: p.poolVolume||'', areaM2: p.areaM2||'', filterIntervalDays: Number(p.filterIntervalDays||180), herbicideIntervalDays: Number(p.herbicideIntervalDays||30), lastHerbicideDate: p.lastHerbicideDate||'', active: bool(p.active!==false) });
-  return getAsset(id);
-};
-const deleteAsset = (id) => stmtDeleteAsset.run(id);
-
-// ─── Maintenance Records ───
-const stmtAllRecords = db.prepare('SELECT * FROM maintenance_records ORDER BY date DESC, id DESC');
-const stmtInsertRecord = db.prepare('INSERT INTO maintenance_records (assetId,date,type,description,cost,technician,supplierId,notes,herbicideProduct,herbicideQuantity,nextApplicationDate) VALUES (@assetId,@date,@type,@description,@cost,@technician,@supplierId,@notes,@herbicideProduct,@herbicideQuantity,@nextApplicationDate)');
-const stmtDeleteRecord = db.prepare('DELETE FROM maintenance_records WHERE id = ?');
-
-const getAllRecords = () => stmtAllRecords.all();
-const insertRecord = (p) => {
-  const date = p.date || new Date().toISOString().slice(0,10);
-  const type = p.type || 'preventiva';
-  const payload = { assetId: Number(p.assetId), date, type, description: p.description||'', cost: Number(p.cost||0), technician: p.technician||'', supplierId: p.supplierId||null, notes: p.notes||'', herbicideProduct: p.herbicideProduct||'', herbicideQuantity: p.herbicideQuantity||'', nextApplicationDate: p.nextApplicationDate||'' };
-  const r = stmtInsertRecord.run(payload);
-  if (type === 'aplicacao_herbicida') {
-    stmtUpdateAssetHerbicideDate.run({ id: Number(p.assetId), date });
-  } else {
-    stmtUpdateAssetLastDate.run({ id: Number(p.assetId), date });
-  }
-  return { id: Number(r.lastInsertRowid), ...payload };
-};
-const deleteRecord = (id) => stmtDeleteRecord.run(id);
-
-// ─── IT Inventory Assets ───
-const stmtAllInventoryAssets = db.prepare('SELECT * FROM inventory_assets ORDER BY description, assetTag');
-const stmtGetInventoryAsset = db.prepare('SELECT * FROM inventory_assets WHERE id = ?');
-const stmtInsertInventoryAsset = db.prepare('INSERT INTO inventory_assets (assetTag,barcode,serialNumber,description,department,assignedTo,purchaseCost,stockQuantity,purchaseDate,brand,model,fiscalClass,depreciationRate,supplierId,status,notes) VALUES (@assetTag,@barcode,@serialNumber,@description,@department,@assignedTo,@purchaseCost,@stockQuantity,@purchaseDate,@brand,@model,@fiscalClass,@depreciationRate,@supplierId,@status,@notes)');
-const stmtUpdateInventoryAsset = db.prepare('UPDATE inventory_assets SET assetTag=@assetTag,barcode=@barcode,serialNumber=@serialNumber,description=@description,department=@department,assignedTo=@assignedTo,purchaseCost=@purchaseCost,stockQuantity=@stockQuantity,purchaseDate=@purchaseDate,brand=@brand,model=@model,fiscalClass=@fiscalClass,depreciationRate=@depreciationRate,supplierId=@supplierId,status=@status,notes=@notes WHERE id=@id');
-const stmtDeleteInventoryAsset = db.prepare('DELETE FROM inventory_assets WHERE id = ?');
-
-const getAllInventoryAssets = () => stmtAllInventoryAssets.all();
-const getInventoryAsset = (id) => stmtGetInventoryAsset.get(id);
-const insertInventoryAsset = (p) => {
-  const r = stmtInsertInventoryAsset.run({
-    assetTag: p.assetTag || '',
-    barcode: p.barcode || '',
-    serialNumber: p.serialNumber || '',
-    description: p.description || '',
-    department: p.department || '',
-    assignedTo: p.assignedTo || '',
-    purchaseCost: Number(p.purchaseCost || 0),
-    stockQuantity: Math.max(0, Number(p.stockQuantity || 1)),
-    purchaseDate: p.purchaseDate || '',
-    brand: p.brand || '',
-    model: p.model || '',
-    fiscalClass: p.fiscalClass || 'processamento_dados',
-    depreciationRate: Number(p.depreciationRate || 20),
-    supplierId: p.supplierId || null,
-    status: p.status || 'em_uso',
-    notes: p.notes || '',
-  });
-  return getInventoryAsset(Number(r.lastInsertRowid));
-};
-const updateInventoryAsset = (id, p) => {
-  stmtUpdateInventoryAsset.run({
+async function updateSupplier(id, payload, client) {
+  await query(`
+    UPDATE suppliers
+    SET name = $1, "tradeName" = $2, type = $3, city = $4, state = $5, cnpj = $6, notes = $7, active = $8
+    WHERE id = $9
+  `, [
+    payload.name || '',
+    payload.tradeName || '',
+    payload.type || '',
+    payload.city || '',
+    payload.state || '',
+    payload.cnpj || '',
+    payload.notes || '',
+    bool(payload.active),
     id,
-    assetTag: p.assetTag || '',
-    barcode: p.barcode || '',
-    serialNumber: p.serialNumber || '',
-    description: p.description || '',
-    department: p.department || '',
-    assignedTo: p.assignedTo || '',
-    purchaseCost: Number(p.purchaseCost || 0),
-    stockQuantity: Math.max(0, Number(p.stockQuantity || 1)),
-    purchaseDate: p.purchaseDate || '',
-    brand: p.brand || '',
-    model: p.model || '',
-    fiscalClass: p.fiscalClass || 'processamento_dados',
-    depreciationRate: Number(p.depreciationRate || 20),
-    supplierId: p.supplierId || null,
-    status: p.status || 'em_uso',
-    notes: p.notes || '',
+  ], client);
+  return getSupplier(id, client);
+}
+
+async function deleteSupplier(id, client) {
+  const { rows } = await query(`
+    SELECT (
+      (SELECT COUNT(*) FROM price_history WHERE "supplierId" = $1) +
+      (SELECT COUNT(*) FROM extra_purchases WHERE "supplierId" = $1) +
+      (SELECT COUNT(*) FROM receipts WHERE "supplierId" = $1)
+    )::int AS total
+  `, [id], client);
+  const total = Number(rows[0]?.total || 0);
+  if (total > 0) return { error: 'Fornecedor tem registros vinculados', refs: total };
+  await query('DELETE FROM suppliers WHERE id = $1', [id], client);
+  return { ok: true };
+}
+
+async function getCycle(client) {
+  const { rows } = await query('SELECT * FROM cycle WHERE id = 1', [], client);
+  return normalizeCycle(rows[0]);
+}
+
+async function updateCycle(payload, client) {
+  await query(`
+    UPDATE cycle
+    SET "lastPurchaseDate" = $1, "intervalDays" = $2
+    WHERE id = 1
+  `, [
+    payload.lastPurchaseDate || '',
+    toNumber(payload.intervalDays, 60),
+  ], client);
+  return getCycle(client);
+}
+
+async function getSettings(client) {
+  const { rows } = await query('SELECT * FROM settings WHERE id = 1', [], client);
+  return normalizeSettings(rows[0]);
+}
+
+async function updateSettings(payload, client) {
+  await query('UPDATE settings SET "anthropicApiKey" = $1 WHERE id = 1', [payload.anthropicApiKey || ''], client);
+  return getSettings(client);
+}
+
+async function getAllAssets(client) {
+  const { rows } = await query('SELECT * FROM maintenance_assets ORDER BY name', [], client);
+  return rows.map(normalizeAsset);
+}
+
+async function getAsset(id, client) {
+  const { rows } = await query('SELECT * FROM maintenance_assets WHERE id = $1', [id], client);
+  return normalizeAsset(rows[0]);
+}
+
+async function insertAsset(payload, client) {
+  const { rows } = await query(`
+    INSERT INTO maintenance_assets (
+      category, name, location, brand, model, "serialNumber", "supplierId", "supplierName",
+      "intervalDays", "lastMaintenanceDate", notes, "btuCapacity", "acType", "inkColors",
+      "poolVolume", "areaM2", "filterIntervalDays", "herbicideIntervalDays", "lastHerbicideDate", active
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+    RETURNING *
+  `, [
+    payload.category || 'outro',
+    payload.name || '',
+    payload.location || '',
+    payload.brand || '',
+    payload.model || '',
+    payload.serialNumber || '',
+    payload.supplierId || null,
+    payload.supplierName || '',
+    toNumber(payload.intervalDays, 180),
+    payload.lastMaintenanceDate || '',
+    payload.notes || '',
+    payload.btuCapacity || '',
+    payload.acType || '',
+    payload.inkColors || '',
+    payload.poolVolume || '',
+    payload.areaM2 || '',
+    toNumber(payload.filterIntervalDays, 180),
+    toNumber(payload.herbicideIntervalDays, 30),
+    payload.lastHerbicideDate || '',
+    bool(payload.active),
+  ], client);
+  return normalizeAsset(rows[0]);
+}
+
+async function updateAsset(id, payload, client) {
+  await query(`
+    UPDATE maintenance_assets
+    SET category = $1, name = $2, location = $3, brand = $4, model = $5, "serialNumber" = $6,
+        "supplierId" = $7, "supplierName" = $8, "intervalDays" = $9, "lastMaintenanceDate" = $10,
+        notes = $11, "btuCapacity" = $12, "acType" = $13, "inkColors" = $14, "poolVolume" = $15,
+        "areaM2" = $16, "filterIntervalDays" = $17, "herbicideIntervalDays" = $18, "lastHerbicideDate" = $19,
+        active = $20
+    WHERE id = $21
+  `, [
+    payload.category || 'outro',
+    payload.name || '',
+    payload.location || '',
+    payload.brand || '',
+    payload.model || '',
+    payload.serialNumber || '',
+    payload.supplierId || null,
+    payload.supplierName || '',
+    toNumber(payload.intervalDays, 180),
+    payload.lastMaintenanceDate || '',
+    payload.notes || '',
+    payload.btuCapacity || '',
+    payload.acType || '',
+    payload.inkColors || '',
+    payload.poolVolume || '',
+    payload.areaM2 || '',
+    toNumber(payload.filterIntervalDays, 180),
+    toNumber(payload.herbicideIntervalDays, 30),
+    payload.lastHerbicideDate || '',
+    bool(payload.active),
+    id,
+  ], client);
+  return getAsset(id, client);
+}
+
+async function deleteAsset(id, client) {
+  await query('DELETE FROM maintenance_assets WHERE id = $1', [id], client);
+}
+
+async function getAllRecords(client) {
+  const { rows } = await query('SELECT * FROM maintenance_records ORDER BY date DESC, id DESC', [], client);
+  return rows.map(normalizeRecord);
+}
+
+async function insertRecord(payload) {
+  return withTransaction(async (client) => {
+    const date = payload.date || new Date().toISOString().slice(0, 10);
+    const { rows } = await query(`
+      INSERT INTO maintenance_records (
+        "assetId", date, type, description, cost, technician, "supplierId", notes, "herbicideProduct", "herbicideQuantity", "nextApplicationDate"
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *
+    `, [
+      Number(payload.assetId),
+      date,
+      payload.type || 'preventiva',
+      payload.description || '',
+      toNumber(payload.cost),
+      payload.technician || '',
+      payload.supplierId || null,
+      payload.notes || '',
+      payload.herbicideProduct || '',
+      payload.herbicideQuantity || '',
+      payload.nextApplicationDate || '',
+    ], client);
+
+    if ((payload.type || 'preventiva') === 'aplicacao_herbicida') {
+      await query('UPDATE maintenance_assets SET "lastHerbicideDate" = $1 WHERE id = $2', [date, Number(payload.assetId)], client);
+    } else {
+      await query('UPDATE maintenance_assets SET "lastMaintenanceDate" = $1 WHERE id = $2', [date, Number(payload.assetId)], client);
+    }
+
+    return normalizeRecord(rows[0]);
   });
-  return getInventoryAsset(id);
-};
-const deleteInventoryAsset = (id) => stmtDeleteInventoryAsset.run(id);
+}
 
-// ─── Full State ───
-const getFullState = () => ({
-  items: getAllItems(),
-  movements: getAllMovements(),
-  priceHistory: getAllPrices(),
-  extraPurchases: getAllExtras(),
-  receipts: getAllReceipts(),
-  suppliers: getAllSuppliers(),
-  cycle: getCycle(),
-  settings: getSettings(),
-  maintenanceAssets: getAllAssets(),
-  maintenanceRecords: getAllRecords(),
-  inventoryAssets: getAllInventoryAssets(),
-});
+async function deleteRecord(id, client) {
+  await query('DELETE FROM maintenance_records WHERE id = $1', [id], client);
+}
 
-// ─── Migração do localStorage ───
-const migrateFromLocalStorage = (data) => {
-  const migrate = db.transaction(() => {
-    const itemCount = db.prepare('SELECT COUNT(*) as n FROM items').get().n;
-    const supplierCount = db.prepare('SELECT COUNT(*) as n FROM suppliers').get().n;
+async function getAllInventoryAssets(client) {
+  const { rows } = await query('SELECT * FROM inventory_assets ORDER BY description, "assetTag"', [], client);
+  return rows.map(normalizeInventoryAsset);
+}
+
+async function getInventoryAsset(id, client) {
+  const { rows } = await query('SELECT * FROM inventory_assets WHERE id = $1', [id], client);
+  return normalizeInventoryAsset(rows[0]);
+}
+
+async function insertInventoryAsset(payload, client) {
+  const { rows } = await query(`
+    INSERT INTO inventory_assets (
+      "assetTag", barcode, "serialNumber", description, department, "assignedTo", "purchaseCost",
+      "stockQuantity", "purchaseDate", brand, model, "fiscalClass", "depreciationRate", "supplierId", status, notes
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+    RETURNING *
+  `, [
+    payload.assetTag || '',
+    payload.barcode || '',
+    payload.serialNumber || '',
+    payload.description || '',
+    payload.department || '',
+    payload.assignedTo || '',
+    toNumber(payload.purchaseCost),
+    Math.max(0, toNumber(payload.stockQuantity, 1)),
+    payload.purchaseDate || '',
+    payload.brand || '',
+    payload.model || '',
+    payload.fiscalClass || 'processamento_dados',
+    toNumber(payload.depreciationRate, 20),
+    payload.supplierId || null,
+    payload.status || 'em_uso',
+    payload.notes || '',
+  ], client);
+  return normalizeInventoryAsset(rows[0]);
+}
+
+async function updateInventoryAsset(id, payload, client) {
+  await query(`
+    UPDATE inventory_assets
+    SET "assetTag" = $1, barcode = $2, "serialNumber" = $3, description = $4, department = $5,
+        "assignedTo" = $6, "purchaseCost" = $7, "stockQuantity" = $8, "purchaseDate" = $9,
+        brand = $10, model = $11, "fiscalClass" = $12, "depreciationRate" = $13, "supplierId" = $14,
+        status = $15, notes = $16
+    WHERE id = $17
+  `, [
+    payload.assetTag || '',
+    payload.barcode || '',
+    payload.serialNumber || '',
+    payload.description || '',
+    payload.department || '',
+    payload.assignedTo || '',
+    toNumber(payload.purchaseCost),
+    Math.max(0, toNumber(payload.stockQuantity, 1)),
+    payload.purchaseDate || '',
+    payload.brand || '',
+    payload.model || '',
+    payload.fiscalClass || 'processamento_dados',
+    toNumber(payload.depreciationRate, 20),
+    payload.supplierId || null,
+    payload.status || 'em_uso',
+    payload.notes || '',
+    id,
+  ], client);
+  return getInventoryAsset(id, client);
+}
+
+async function deleteInventoryAsset(id, client) {
+  await query('DELETE FROM inventory_assets WHERE id = $1', [id], client);
+}
+
+async function getFullState(client) {
+  const [
+    items,
+    movements,
+    priceHistory,
+    extraPurchases,
+    receipts,
+    suppliers,
+    cycle,
+    settings,
+    maintenanceAssets,
+    maintenanceRecords,
+    inventoryAssets,
+  ] = await Promise.all([
+    getAllItems(client),
+    getAllMovements(client),
+    getAllPrices(client),
+    getAllExtras(client),
+    getAllReceipts(client),
+    getAllSuppliers(client),
+    getCycle(client),
+    getSettings(client),
+    getAllAssets(client),
+    getAllRecords(client),
+    getAllInventoryAssets(client),
+  ]);
+
+  return {
+    items,
+    movements,
+    priceHistory,
+    extraPurchases,
+    receipts,
+    suppliers,
+    cycle,
+    settings,
+    maintenanceAssets,
+    maintenanceRecords,
+    inventoryAssets,
+  };
+}
+
+async function migrateFromLocalStorage(data) {
+  return withTransaction(async (client) => {
+    const itemCount = Number((await query('SELECT COUNT(*)::int AS total FROM items', [], client)).rows[0]?.total || 0);
+    const supplierCount = Number((await query('SELECT COUNT(*)::int AS total FROM suppliers', [], client)).rows[0]?.total || 0);
     if (itemCount > 0 || supplierCount > 0) return { skipped: true, reason: 'DB already has data' };
 
-    const idMapSuppliers = {};
-    const idMapItems = {};
+    const supplierMap = new Map();
+    const itemMap = new Map();
 
-    for (const s of (data.suppliers || [])) {
-      const r = db.prepare('INSERT INTO suppliers (name, tradeName, type, city, state, cnpj, notes, active) VALUES (?,?,?,?,?,?,?,?)').run(
-        s.name || '', s.tradeName || '', s.type || '', s.city || '', s.state || '', s.cnpj || '', s.notes || '', bool(s.active !== false)
-      );
-      idMapSuppliers[s.id] = Number(r.lastInsertRowid);
+    for (const supplier of (data.suppliers || [])) {
+      const inserted = await insertSupplier(supplier, client);
+      supplierMap.set(supplier.id, inserted.id);
     }
 
     for (const item of (data.items || [])) {
-      const r = db.prepare('INSERT INTO items (name, unit, quantity, minStock, weeklyConsumption) VALUES (?,?,?,?,?)').run(
-        item.name, item.unit || 'un', Number(item.quantity || 0), Number(item.minStock || 0), Number(item.weeklyConsumption || 0)
-      );
-      idMapItems[item.id] = Number(r.lastInsertRowid);
+      const inserted = await insertItem(item, client);
+      itemMap.set(item.id, inserted.id);
     }
 
-    for (const m of (data.movements || [])) {
-      const newItemId = idMapItems[m.itemId] || m.itemId;
-      db.prepare('INSERT INTO movements (type, itemId, quantity, date, notes) VALUES (?,?,?,?,?)').run(
-        m.type, newItemId, Number(m.quantity), m.date || '', m.notes || ''
-      );
+    for (const movement of (data.movements || [])) {
+      await query(`
+        INSERT INTO movements (type, "itemId", quantity, date, notes)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        movement.type,
+        itemMap.get(movement.itemId) || movement.itemId,
+        toNumber(movement.quantity),
+        movement.date || '',
+        movement.notes || '',
+      ], client);
     }
 
-    for (const p of (data.priceHistory || [])) {
-      const newItemId = idMapItems[p.itemId] || p.itemId;
-      const newSuppId = idMapSuppliers[p.supplierId] || p.supplierId || null;
-      db.prepare('INSERT INTO price_history (itemId, supplierId, market, price, date) VALUES (?,?,?,?,?)').run(
-        newItemId, newSuppId, p.market || '', Number(p.price), p.date || ''
-      );
+    for (const price of (data.priceHistory || [])) {
+      await insertPrice({
+        ...price,
+        itemId: itemMap.get(price.itemId) || price.itemId,
+        supplierId: supplierMap.get(price.supplierId) || price.supplierId || null,
+      }, client);
     }
 
-    for (const e of (data.extraPurchases || [])) {
-      const newItemId = idMapItems[e.itemId] || e.itemId;
-      const newSuppId = idMapSuppliers[e.supplierId] || e.supplierId || null;
-      db.prepare('INSERT INTO extra_purchases (itemId, quantity, date, cost, reason, supplierId, location) VALUES (?,?,?,?,?,?,?)').run(
-        newItemId, Number(e.quantity), e.date || '', Number(e.cost || 0), e.reason || '', newSuppId, e.location || ''
-      );
+    for (const extra of (data.extraPurchases || [])) {
+      await insertExtra({
+        ...extra,
+        itemId: itemMap.get(extra.itemId) || extra.itemId,
+        supplierId: supplierMap.get(extra.supplierId) || extra.supplierId || null,
+      }, client);
     }
 
-    for (const r of (data.receipts || [])) {
+    for (const receipt of (data.receipts || [])) {
       let filePath = '';
-      const dataUrl = r.fileDataUrl || r.dataUrl || '';
+      const dataUrl = receipt.fileDataUrl || receipt.dataUrl || '';
       if (dataUrl && dataUrl.startsWith('data:')) {
         try {
           const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -479,135 +797,183 @@ const migrateFromLocalStorage = (data) => {
             const mime = match[1];
             const ext = mime.includes('pdf') ? 'pdf' : mime.includes('png') ? 'png' : 'jpg';
             const buffer = Buffer.from(match[2], 'base64');
-            const fileName = `migrated-${r.id || Date.now()}-${Date.now()}.${ext}`;
-            fs.writeFileSync(path.join(RECEIPTS_DIR, fileName), buffer);
-            filePath = fileName;
+            filePath = `migrated-${receipt.id || Date.now()}-${Date.now()}.${ext}`;
+            fs.writeFileSync(path.join(RECEIPTS_DIR, filePath), buffer);
           }
-        } catch { /* skip */ }
+        } catch { /* noop */ }
       }
-      const newSuppId = idMapSuppliers[r.supplierId] || r.supplierId || null;
-      db.prepare('INSERT INTO receipts (title, value, date, importedAt, notes, source, supplierId, fileName, filePath, mimeType, accessKey, queryUrl) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(
-        r.title || '', Number(r.value || 0), r.date || '', r.importedAt || '', r.notes || '',
-        r.source || '', newSuppId, r.fileName || '', filePath, r.mimeType || '', r.accessKey || '', r.queryUrl || ''
-      );
+
+      await insertReceipt({
+        ...receipt,
+        supplierId: supplierMap.get(receipt.supplierId) || receipt.supplierId || null,
+      }, filePath, client);
     }
 
     if (data.cycle) {
-      db.prepare('UPDATE cycle SET lastPurchaseDate=?, intervalDays=? WHERE id=1').run(
-        data.cycle.lastPurchaseDate || '', Number(data.cycle.intervalDays || 60)
-      );
+      await updateCycle(data.cycle, client);
     }
 
     if (data.settings) {
-      db.prepare('UPDATE settings SET anthropicApiKey=? WHERE id=1').run(data.settings.anthropicApiKey || '');
+      await updateSettings(data.settings, client);
     }
 
-    return { ok: true, migrated: { suppliers: Object.keys(idMapSuppliers).length, items: Object.keys(idMapItems).length } };
+    return {
+      ok: true,
+      migrated: {
+        suppliers: supplierMap.size,
+        items: itemMap.size,
+      },
+    };
   });
+}
 
-  return migrate();
-};
-
-// ─── Batch Import ───
-const insertReceiptAttachment = (receiptId, file) => {
-  if (!receiptId || !file?.storedName) {
-    return null;
-  }
+async function insertReceiptAttachment(receiptId, file, client) {
+  if (!receiptId || !file?.storedName) return null;
 
   const label = file.label
     || (file.mimeType?.includes('xml') ? 'XML complementar' : file.mimeType?.includes('pdf') ? 'PDF complementar' : 'Arquivo complementar');
 
-  const result = stmtInsertReceiptFile.run({
+  const { rows } = await query(`
+    INSERT INTO receipt_files ("receiptId", kind, label, "fileName", "filePath", "mimeType")
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING *
+  `, [
     receiptId,
-    kind: file.kind || 'attachment',
+    file.kind || 'attachment',
     label,
-    fileName: file.originalName || file.fileName || '',
-    filePath: file.storedName,
-    mimeType: file.mimeType || '',
-  });
+    file.originalName || file.fileName || '',
+    file.storedName,
+    file.mimeType || '',
+  ], client);
 
-  return { id: Number(result.lastInsertRowid), receiptId, label, fileName: file.originalName || file.fileName || '', filePath: file.storedName, mimeType: file.mimeType || '' };
-};
+  return normalizeReceiptFile(rows[0]);
+}
 
-const getReceiptAttachment = (receiptId, fileId) => stmtReceiptFileById.get(fileId, receiptId);
+async function getReceiptAttachment(receiptId, fileId, client) {
+  const { rows } = await query('SELECT * FROM receipt_files WHERE id = $1 AND "receiptId" = $2', [fileId, receiptId], client);
+  return normalizeReceiptFile(rows[0]);
+}
 
-const batchImportReceipt = (payload, primaryFile = null, extraFiles = []) => {
-  const batch = db.transaction(() => {
+async function batchImportReceipt(payload, primaryFile = null, extraFiles = []) {
+  return withTransaction(async (client) => {
     const results = { newItems: [], movements: [], prices: [], receipt: null, attachments: [] };
-    const receiptResult = stmtInsertReceipt.run({
+    const receipt = await insertReceipt({
       title: payload.title || payload.fileName || 'Comprovante importado',
-      value: Number(payload.totalValue || 0), date: payload.date || new Date().toISOString().slice(0, 10),
-      importedAt: new Date().toISOString(), notes: payload.notes || '', source: payload.source || 'entrada-ocr',
+      value: toNumber(payload.totalValue),
+      date: payload.date || new Date().toISOString().slice(0, 10),
+      importedAt: new Date().toISOString(),
+      notes: payload.notes || '',
+      source: payload.source || 'entrada-ocr',
       supplierId: payload.supplierId || null,
       fileName: primaryFile?.originalName || payload.fileName || '',
-      filePath: primaryFile?.storedName || '',
       mimeType: primaryFile?.mimeType || payload.mimeType || '',
-      accessKey: payload.accessKey || '', queryUrl: payload.queryUrl || ''
-    });
-    const receiptId = Number(receiptResult.lastInsertRowid);
-    results.receipt = { id: receiptId };
-    results.attachments = extraFiles.map((file) => insertReceiptAttachment(receiptId, file)).filter(Boolean);
+      accessKey: payload.accessKey || '',
+      queryUrl: payload.queryUrl || '',
+    }, primaryFile?.storedName || '', client);
+
+    results.receipt = { id: receipt.id };
+
+    for (const file of extraFiles) {
+      const attachment = await insertReceiptAttachment(receipt.id, file, client);
+      if (attachment) results.attachments.push(attachment);
+    }
 
     for (const draft of (payload.items || [])) {
       if (!draft.import) continue;
+
       let itemId = draft.linkedItemId;
       if (!itemId) {
-        const r = stmtInsertItem.run({
+        const item = await insertItem({
           name: draft.name,
           unit: draft.unit || 'un',
           quantity: 0,
           minStock: 1,
           weeklyConsumption: 0,
-          createdByReceiptId: receiptId,
-        });
-        itemId = Number(r.lastInsertRowid);
+          createdByReceiptId: receipt.id,
+        }, client);
+        itemId = item.id;
         results.newItems.push({ id: itemId, name: draft.name });
       }
 
-      const mR = stmtInsertMovement.run({
-        type: 'entrada',
+      const { rows } = await query(`
+        INSERT INTO movements (type, "itemId", quantity, date, notes, "receiptId")
+        VALUES ('entrada', $1, $2, $3, $4, $5)
+        RETURNING *
+      `, [
         itemId,
-        quantity: Number(draft.quantity || 0),
-        date: payload.date || new Date().toISOString().slice(0, 10),
-        notes: `Importado de ${payload.fileName || 'comprovante'}`,
-        receiptId,
-      });
-      results.movements.push({ id: Number(mR.lastInsertRowid), itemId });
+        toNumber(draft.quantity),
+        payload.date || new Date().toISOString().slice(0, 10),
+        `Importado de ${payload.fileName || 'comprovante'}`,
+        receipt.id,
+      ], client);
+      results.movements.push({ id: Number(rows[0].id), itemId });
 
-      const item = getItem(itemId);
-      if (item) updateItemQty(itemId, item.quantity + Number(draft.quantity || 0));
+      const item = await getItem(itemId, client);
+      if (item) {
+        await updateItemQty(itemId, toNumber(item.quantity) + toNumber(draft.quantity), client);
+      }
 
-      if (draft.unitPrice > 0 && payload.supplierId) {
-        const pR = stmtInsertPrice.run({
+      if (toNumber(draft.unitPrice) > 0 && payload.supplierId) {
+        const price = await insertPrice({
           itemId,
           supplierId: Number(payload.supplierId),
           market: '',
-          price: Number(draft.unitPrice),
+          price: toNumber(draft.unitPrice),
           date: payload.date || new Date().toISOString().slice(0, 10),
-          receiptId,
-        });
-        results.prices.push({ id: Number(pR.lastInsertRowid), itemId });
+          receiptId: receipt.id,
+        }, client);
+        results.prices.push({ id: price.id, itemId });
       }
     }
 
     return results;
   });
-
-  return batch();
-};
+}
 
 module.exports = {
-  getAllItems, getItem, insertItem, updateItem, deleteItem, updateItemQty, updateItemConsumption,
-  getAllMovements, insertMovement,
-  getAllPrices, insertPrice,
-  getAllExtras, insertExtra,
-  getAllReceipts, getReceipt, getReceiptAttachment, insertReceipt, insertReceiptAttachment, deleteReceipt,
-  getAllSuppliers, getSupplier, insertSupplier, updateSupplier, deleteSupplier,
-  getCycle, updateCycle: updateCycleQ,
-  getSettings, updateSettings: updateSettingsQ,
-  getFullState, migrateFromLocalStorage, batchImportReceipt,
-  getAllAssets, getAsset, insertAsset, updateAsset, deleteAsset,
-  getAllRecords, insertRecord, deleteRecord,
-  getAllInventoryAssets, getInventoryAsset, insertInventoryAsset, updateInventoryAsset, deleteInventoryAsset,
+  getAllItems,
+  getItem,
+  insertItem,
+  updateItem,
+  deleteItem,
+  updateItemQty,
+  updateItemConsumption,
+  getAllMovements,
+  insertMovement,
+  getAllPrices,
+  insertPrice,
+  getAllExtras,
+  insertExtra,
+  getAllReceipts,
+  getReceipt,
+  getReceiptAttachment,
+  insertReceipt,
+  insertReceiptAttachment,
+  deleteReceipt,
+  getAllSuppliers,
+  getSupplier,
+  insertSupplier,
+  updateSupplier,
+  deleteSupplier,
+  getCycle,
+  updateCycle,
+  getSettings,
+  updateSettings,
+  getFullState,
+  migrateFromLocalStorage,
+  batchImportReceipt,
+  getAllAssets,
+  getAsset,
+  insertAsset,
+  updateAsset,
+  deleteAsset,
+  getAllRecords,
+  insertRecord,
+  deleteRecord,
+  getAllInventoryAssets,
+  getInventoryAsset,
+  insertInventoryAsset,
+  updateInventoryAsset,
+  deleteInventoryAsset,
   RECEIPTS_DIR,
 };
