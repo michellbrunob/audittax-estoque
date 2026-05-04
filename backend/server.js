@@ -21,7 +21,20 @@ function requireOptional(moduleName) {
 }
 
 const tesseract = requireOptional('node-tesseract-ocr');
-const pdfPoppler = requireOptional('pdf-poppler');
+let pdfPoppler = null;
+
+function getPdfPoppler() {
+  if (pdfPoppler) {
+    return pdfPoppler;
+  }
+
+  if (process.platform !== 'win32' && process.platform !== 'darwin') {
+    return null;
+  }
+
+  pdfPoppler = require('pdf-poppler');
+  return pdfPoppler;
+}
 
 let readBarcodes;
 const zxingReady = import('zxing-wasm/reader').then((mod) => {
@@ -499,7 +512,8 @@ async function extrairTextoPdf(bufferPdf) {
 }
 
 async function converterPdfParaImagem(caminhoPdf) {
-  if (!pdfPoppler) {
+  const poppler = getPdfPoppler();
+  if (!poppler) {
     throw new Error('pdf-poppler indisponivel neste ambiente.');
   }
 
@@ -512,7 +526,7 @@ async function converterPdfParaImagem(caminhoPdf) {
     page: 1,
   };
 
-  await pdfPoppler.convert(caminhoPdf, options);
+  await poppler.convert(caminhoPdf, options);
 
   const arquivos = await fs.readdir(outputDir);
   const primeiraImagem = arquivos.find((arquivo) => arquivo.toLowerCase().endsWith('.png'));
