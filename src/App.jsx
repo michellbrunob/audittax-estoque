@@ -1168,14 +1168,14 @@ function App() {
     window.__api.deleteReceipt(id, mode),
     mode === 'revert-import' ? 'Importacao revertida e comprovante excluido.' : 'Comprovante excluido.'
   );
-  const addMaintenanceAsset = async (p) => { const r = await window.__api.addMaintenanceAsset(p); setState((s) => ({ ...s, maintenanceAssets: [...s.maintenanceAssets, r].sort((a,b) => a.name.localeCompare(b.name)) })); };
-  const updateMaintenanceAsset = async (id, p) => { const r = await window.__api.updateMaintenanceAsset(id, p); setState((s) => ({ ...s, maintenanceAssets: s.maintenanceAssets.map((a) => a.id === id ? r : a) })); };
-  const deleteMaintenanceAsset = async (id) => { await window.__api.deleteMaintenanceAsset(id); setState((s) => ({ ...s, maintenanceAssets: s.maintenanceAssets.filter((a) => a.id !== id) })); };
-  const addMaintenanceRecord = async (p) => { const r = await window.__api.addMaintenanceRecord(p); setState((s) => ({ ...s, maintenanceRecords: [r, ...s.maintenanceRecords], maintenanceAssets: s.maintenanceAssets.map((a) => a.id === Number(p.assetId) ? { ...a, ...(p.type === 'aplicacao_herbicida' ? { lastHerbicideDate: p.date } : { lastMaintenanceDate: p.date }) } : a) })); };
-  const deleteMaintenanceRecord = async (id) => { await window.__api.deleteMaintenanceRecord(id); setState((s) => ({ ...s, maintenanceRecords: s.maintenanceRecords.filter((r) => r.id !== id) })); };
-  const addInventoryAsset = async (p) => { const r = await window.__api.addInventoryAsset(p); setState((s) => ({ ...s, inventoryAssets: [...s.inventoryAssets, r].sort((a,b) => (a.description || '').localeCompare(b.description || '')) })); };
-  const updateInventoryAsset = async (id, p) => { const r = await window.__api.updateInventoryAsset(id, p); setState((s) => ({ ...s, inventoryAssets: s.inventoryAssets.map((a) => a.id === id ? r : a) })); };
-  const deleteInventoryAsset = async (id) => { await window.__api.deleteInventoryAsset(id); setState((s) => ({ ...s, inventoryAssets: s.inventoryAssets.filter((a) => a.id !== id) })); };
+  const addMaintenanceAsset = (p) => apiCall(window.__api.addMaintenanceAsset(p), 'Ativo predial cadastrado.');
+  const updateMaintenanceAsset = (id, p) => apiCall(window.__api.updateMaintenanceAsset(id, p), 'Ativo predial atualizado.');
+  const deleteMaintenanceAsset = (id) => apiCall(window.__api.deleteMaintenanceAsset(id), 'Ativo predial excluido.');
+  const addMaintenanceRecord = (p) => apiCall(window.__api.addMaintenanceRecord(p), 'Manutencao registrada.');
+  const deleteMaintenanceRecord = (id) => apiCall(window.__api.deleteMaintenanceRecord(id), 'Registro de manutencao excluido.');
+  const addInventoryAsset = (p) => apiCall(window.__api.addInventoryAsset(p), 'Equipamento cadastrado.');
+  const updateInventoryAsset = (id, p) => apiCall(window.__api.updateInventoryAsset(id, p), 'Equipamento atualizado.');
+  const deleteInventoryAsset = (id) => apiCall(window.__api.deleteInventoryAsset(id), 'Equipamento excluido.');
   const addSupplier = (payload) => apiCall(window.__api.addSupplier(payload), 'Fornecedor cadastrado.');
   const updateSupplier = (supplierId, payload) => apiCall(window.__api.updateSupplier(supplierId, payload), 'Fornecedor atualizado.');
   const deleteSupplier = (supplierId) => {
@@ -1357,7 +1357,9 @@ function App() {
     if (readerFileRef.current) fd.append('primaryFile', readerFileRef.current);
     if (readerAttachmentRef.current) fd.append('attachmentFile', readerAttachmentRef.current);
 
-    const API_BASE = window.__api ? `http://${window.location.hostname}:3333` : 'http://127.0.0.1:3333';
+    const API_BASE = window.__api
+      ? (window.__api.receiptFileUrl(0).replace(/\/api\/receipts\/0\/file$/, ''))
+      : 'http://127.0.0.1:3333';
     fetch(`${API_BASE}/api/import-receipt`, { method: 'POST', body: fd })
       .then((r) => r.json())
       .then((result) => {
@@ -1957,7 +1959,15 @@ function ReceiptsPanel({ receipts, onAdd, onDelete, suppliersById }) {
 
   const viewingReceipt = viewingId !== null ? receipts.find((r) => r.id === viewingId) : null;
   const selectedAttachment = viewingAttachment || viewingReceipt?.attachments?.[0] || null;
-  const fileUrl = selectedAttachment ? (selectedAttachment.isPrimary ? (window.__api ? window.__api.receiptFileUrl(viewingReceipt.id) : '') : (window.__api ? window.__api.receiptAttachmentUrl(viewingReceipt.id, selectedAttachment.id) : '')) : (viewingReceipt ? (viewingReceipt.filePath ? (window.__api ? window.__api.receiptFileUrl(viewingReceipt.id) : '') : viewingReceipt.dataUrl || '') : '');
+  const fileUrl = selectedAttachment
+    ? (selectedAttachment.isPrimary
+      ? (window.__api ? window.__api.receiptFileUrl(viewingReceipt.id) : '')
+      : (window.__api
+        ? (selectedAttachment.filePath
+          ? window.__api.receiptObjectUrl(selectedAttachment.filePath, selectedAttachment.fileName || 'anexo', selectedAttachment.mimeType || 'application/octet-stream')
+          : window.__api.receiptAttachmentUrl(viewingReceipt.id, selectedAttachment.id))
+        : ''))
+    : (viewingReceipt ? (viewingReceipt.filePath ? (window.__api ? window.__api.receiptFileUrl(viewingReceipt.id) : '') : viewingReceipt.dataUrl || '') : '');
   const isPdf = selectedAttachment?.mimeType?.includes('pdf') || viewingReceipt?.mimeType?.includes('pdf');
   const isImage = selectedAttachment?.mimeType?.startsWith('image/') || viewingReceipt?.mimeType?.startsWith('image/') || (viewingReceipt?.dataUrl && viewingReceipt.dataUrl.startsWith('data:image/'));
   const hasFile = Boolean(fileUrl || viewingReceipt?.hasFile || viewingReceipt?.dataUrl || viewingReceipt?.filePath);

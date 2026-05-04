@@ -1034,6 +1034,18 @@ app.get('/api/receipts/:id/file', asyncRoute(async (req, res) => {
     return res.send(fileBuffer);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 }));
+app.get('/api/receipt-file', asyncRoute(async (req, res) => {
+  try {
+    const objectPath = String(req.query.path || '');
+    if (!objectPath) return res.status(404).json({ error: 'Arquivo nao encontrado' });
+    const fileBuffer = await downloadReceiptObject(objectPath);
+    const fileName = String(req.query.name || 'anexo');
+    const mimeType = String(req.query.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    return res.send(fileBuffer);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+}));
 app.get('/api/receipts/:receiptId/files/:fileId', asyncRoute(async (req, res) => {
   try {
     const attachment = await Q.getReceiptAttachment(Number(req.params.receiptId), Number(req.params.fileId));

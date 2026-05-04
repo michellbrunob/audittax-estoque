@@ -35,6 +35,7 @@ const api = {
   deleteReceipt: (id, mode = 'receipt-only') => json('DELETE', `/api/receipts/${id}?mode=${encodeURIComponent(mode)}`),
   receiptFileUrl: (id) => `${API_BASE}/api/receipts/${id}/file`,
   receiptAttachmentUrl: (receiptId, fileId) => `${API_BASE}/api/receipts/${receiptId}/files/${fileId}`,
+  receiptObjectUrl: (filePath, fileName = 'anexo', mimeType = 'application/octet-stream') => `${API_BASE}/api/receipt-file?path=${encodeURIComponent(filePath)}&name=${encodeURIComponent(fileName)}&mimeType=${encodeURIComponent(mimeType)}`,
 
   addSupplier: (p) => json('POST', '/api/suppliers', p),
   updateSupplier: (id, p) => json('PUT', `/api/suppliers/${id}`, p),
