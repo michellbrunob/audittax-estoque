@@ -3,12 +3,10 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
+const { RECEIPTS_DIR } = require('../storage/supabaseStorage.js');
 
 const STORAGE_DIR = path.join(__dirname, '..', 'storage');
-const RECEIPTS_DIR = path.join(STORAGE_DIR, 'receipts');
 const SCHEMA_PATH = path.join(__dirname, '..', 'supabase', 'schema.sql');
-
-fs.mkdirSync(RECEIPTS_DIR, { recursive: true });
 
 const connectionString = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || '';
 

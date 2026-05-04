@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { query, withTransaction, RECEIPTS_DIR } = require('./database.js');
+const { uploadReceiptBuffer, deleteReceiptObject } = require('../storage/supabaseStorage.js');
 
 const bool = (value) => value !== false;
 const toNumber = (value, fallback = 0) => {
@@ -311,18 +312,15 @@ async function insertReceipt(payload, filePath = '', client) {
   return normalizeReceipt(rows[0]);
 }
 
-function deleteReceiptFile(receipt) {
+async function deleteReceiptFile(receipt) {
   if (!receipt?.filePath) return;
-  const fullPath = path.join(RECEIPTS_DIR, receipt.filePath);
-  try { fs.unlinkSync(fullPath); } catch { /* noop */ }
+  await deleteReceiptObject(receipt.filePath);
 }
 
-function deleteAttachmentFiles(attachments) {
-  attachments.forEach((file) => {
-    if (!file?.filePath) return;
-    const fullPath = path.join(RECEIPTS_DIR, file.filePath);
-    try { fs.unlinkSync(fullPath); } catch { /* noop */ }
-  });
+async function deleteAttachmentFiles(attachments) {
+  await Promise.all(attachments.map((file) => (
+    file?.filePath ? deleteReceiptObject(file.filePath) : Promise.resolve()
+  )));
 }
 
 function movementImpact(type, quantity) {
@@ -406,8 +404,8 @@ async function deleteReceipt(id, mode = 'receipt-only') {
     };
   });
 
-  deleteAttachmentFiles(cleanup.attachments);
-  deleteReceiptFile(cleanup.receipt);
+  await deleteAttachmentFiles(cleanup.attachments);
+  await deleteReceiptFile(cleanup.receipt);
   return result;
 }
 
@@ -797,8 +795,12 @@ async function migrateFromLocalStorage(data) {
             const mime = match[1];
             const ext = mime.includes('pdf') ? 'pdf' : mime.includes('png') ? 'png' : 'jpg';
             const buffer = Buffer.from(match[2], 'base64');
-            filePath = `migrated-${receipt.id || Date.now()}-${Date.now()}.${ext}`;
-            fs.writeFileSync(path.join(RECEIPTS_DIR, filePath), buffer);
+            filePath = await uploadReceiptBuffer({
+              buffer,
+              fileName: receipt.fileName || `migrated.${ext}`,
+              mimeType: mime,
+              objectPath: `receipt/migrated-${receipt.id || Date.now()}-${Date.now()}.${ext}`,
+            });
           }
         } catch { /* noop */ }
       }

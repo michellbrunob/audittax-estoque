@@ -921,16 +921,13 @@ app.post('/nfce/upload', upload.single('file'), async (req, res) => {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const Q = require('./db/queries.js');
 const { initDatabase } = require('./db/database.js');
-const { RECEIPTS_DIR } = Q;
-const receiptUpload = multer({ storage: multer.diskStorage({
-  destination: (_, __, cb) => cb(null, RECEIPTS_DIR),
-  filename: (_, file, cb) => { const ext = path.extname(file.originalname) || '.bin'; cb(null, `${Date.now()}${ext}`); }
-}) });
+const { downloadReceiptObject, uploadReceiptBuffer } = require('./storage/supabaseStorage.js');
+const receiptUpload = multer({ storage: multer.memoryStorage() });
 
 function toStoredFile(file, label = '') {
   if (!file) return null;
   return {
-    storedName: file.filename,
+    buffer: file.buffer,
     originalName: file.originalname,
     mimeType: file.mimetype || '',
     label,
@@ -987,7 +984,11 @@ app.get('/api/receipts', asyncRoute(async (_, res) => res.json(await Q.getAllRec
 app.post('/api/receipts', receiptUpload.single('file'), asyncRoute(async (req, res) => {
   try {
     const data = req.body.data ? JSON.parse(req.body.data) : req.body;
-    const filePath = req.file ? req.file.filename : '';
+    const filePath = req.file ? await uploadReceiptBuffer({
+      buffer: req.file.buffer,
+      fileName: req.file.originalname,
+      mimeType: req.file.mimetype || '',
+    }) : '';
     res.json(await Q.insertReceipt(data, filePath));
   } catch (e) { res.status(400).json({ error: e.message }); }
 }));
@@ -995,22 +996,20 @@ app.get('/api/receipts/:id/file', asyncRoute(async (req, res) => {
   try {
     const receipt = await Q.getReceipt(Number(req.params.id));
     if (!receipt?.filePath) return res.status(404).json({ error: 'Arquivo nao encontrado' });
-    const fullPath = path.join(RECEIPTS_DIR, receipt.filePath);
-    if (!require('fs').existsSync(fullPath)) return res.status(404).json({ error: 'Arquivo nao existe em disco' });
+    const fileBuffer = await downloadReceiptObject(receipt.filePath);
     res.setHeader('Content-Type', receipt.mimeType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${receipt.fileName || 'comprovante'}"`);
-    return res.sendFile(fullPath);
+    return res.send(fileBuffer);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 }));
 app.get('/api/receipts/:receiptId/files/:fileId', asyncRoute(async (req, res) => {
   try {
     const attachment = await Q.getReceiptAttachment(Number(req.params.receiptId), Number(req.params.fileId));
     if (!attachment?.filePath) return res.status(404).json({ error: 'Arquivo complementar nao encontrado' });
-    const fullPath = path.join(RECEIPTS_DIR, attachment.filePath);
-    if (!require('fs').existsSync(fullPath)) return res.status(404).json({ error: 'Arquivo nao existe em disco' });
+    const fileBuffer = await downloadReceiptObject(attachment.filePath);
     res.setHeader('Content-Type', attachment.mimeType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${attachment.fileName || 'anexo'}"`);
-    return res.sendFile(fullPath);
+    return res.send(fileBuffer);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 }));
 app.delete('/api/receipts/:id', asyncRoute(async (req, res) => {
@@ -1084,8 +1083,24 @@ app.delete('/api/inventory/assets/:id', asyncRoute(async (req, res) => {
 app.post('/api/import-receipt', receiptUpload.fields([{ name: 'primaryFile', maxCount: 1 }, { name: 'attachmentFile', maxCount: 1 }]), asyncRoute(async (req, res) => {
   try {
     const data = req.body.data ? JSON.parse(req.body.data) : req.body;
-    const primaryFile = toStoredFile(req.files?.primaryFile?.[0]);
-    const attachmentFile = toStoredFile(req.files?.attachmentFile?.[0]);
+    const primaryUpload = req.files?.primaryFile?.[0];
+    const attachmentUpload = req.files?.attachmentFile?.[0];
+    const primaryFile = primaryUpload ? {
+      ...toStoredFile(primaryUpload),
+      storedName: await uploadReceiptBuffer({
+        buffer: primaryUpload.buffer,
+        fileName: primaryUpload.originalname,
+        mimeType: primaryUpload.mimetype || '',
+      }),
+    } : null;
+    const attachmentFile = attachmentUpload ? {
+      ...toStoredFile(attachmentUpload),
+      storedName: await uploadReceiptBuffer({
+        buffer: attachmentUpload.buffer,
+        fileName: attachmentUpload.originalname,
+        mimeType: attachmentUpload.mimetype || '',
+      }),
+    } : null;
     const result = await Q.batchImportReceipt(data, primaryFile, attachmentFile ? [attachmentFile] : []);
     result.state = await Q.getFullState();
     res.json(result);

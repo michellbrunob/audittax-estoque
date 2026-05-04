@@ -7,10 +7,12 @@
   "scripts": {
     "db:init:supabase": "node scripts/init-supabase.js",
     "db:migrate:supabase": "node scripts/migrate-sqlite-to-supabase.js",
+    "db:upload-receipts:supabase": "node scripts/upload-local-receipts-to-storage.js",
     "dev": "node server.js",
     "start": "node server.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.3",
     "better-sqlite3": "^12.8.0",
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
