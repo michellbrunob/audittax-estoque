@@ -8,21 +8,30 @@ const { RECEIPTS_DIR } = require('../storage/supabaseStorage.js');
 const STORAGE_DIR = path.join(__dirname, '..', 'storage');
 const SCHEMA_PATH = path.join(__dirname, '..', 'supabase', 'schema.sql');
 
-const connectionString = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || '';
-
-if (!connectionString) {
-  throw new Error('Configure DATABASE_URL com a connection string do Supabase/Postgres.');
-}
-
 const ssl = process.env.PGSSLMODE === 'disable'
   ? false
   : { rejectUnauthorized: false };
 
-const pool = new Pool({
-  connectionString,
+const pgConfig = {
   ssl,
   max: Number(process.env.PG_POOL_MAX || 10),
-});
+};
+
+if (process.env.PGHOST && process.env.PGUSER && process.env.PGPASSWORD) {
+  pgConfig.host = process.env.PGHOST;
+  pgConfig.port = Number(process.env.PGPORT || 5432);
+  pgConfig.database = process.env.PGDATABASE || 'postgres';
+  pgConfig.user = process.env.PGUSER;
+  pgConfig.password = process.env.PGPASSWORD;
+} else {
+  const connectionString = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || '';
+  if (!connectionString) {
+    throw new Error('Configure DATABASE_URL ou PGHOST/PGUSER/PGPASSWORD para conectar no Supabase/Postgres.');
+  }
+  pgConfig.connectionString = connectionString;
+}
+
+const pool = new Pool(pgConfig);
 
 async function query(text, params = [], client = pool) {
   return client.query(text, params);
