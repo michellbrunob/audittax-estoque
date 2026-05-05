@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 const { RECEIPTS_DIR } = require('../storage/supabaseStorage.js');
+const { hashPassword, normalizeUsername } = require('../auth.js');
 
 const STORAGE_DIR = path.join(__dirname, '..', 'storage');
 const SCHEMA_PATH = path.join(__dirname, '..', 'supabase', 'schema.sql');
@@ -59,6 +60,9 @@ async function withTransaction(callback) {
 
 async function initDatabase() {
   const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  const adminUsername = normalizeUsername(process.env.ADMIN_USERNAME || 'administrador');
+  const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
+  const adminName = process.env.ADMIN_NAME || 'Administrador';
 
   await query(schema);
   await query(`
@@ -71,6 +75,11 @@ async function initDatabase() {
     VALUES (1, '')
     ON CONFLICT (id) DO NOTHING;
   `);
+  await query(`
+    INSERT INTO users (name, username, "passwordHash", role, active, approved)
+    VALUES ($1, $2, $3, 'admin', TRUE, TRUE)
+    ON CONFLICT (username) DO NOTHING;
+  `, [adminName, adminUsername, hashPassword(adminPassword)]);
 }
 
 module.exports = {

@@ -95,6 +95,18 @@ CREATE TABLE IF NOT EXISTS settings (
   "anthropicApiKey" TEXT DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL UNIQUE,
+  "passwordHash" TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  approved BOOLEAN NOT NULL DEFAULT TRUE,
+  "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS maintenance_assets (
   id BIGSERIAL PRIMARY KEY,
   category TEXT NOT NULL DEFAULT 'outro',
@@ -159,3 +171,4 @@ CREATE INDEX IF NOT EXISTS idx_items_created_by_receipt ON items("createdByRecei
 CREATE INDEX IF NOT EXISTS idx_movements_receipt_id ON movements("receiptId");
 CREATE INDEX IF NOT EXISTS idx_price_history_receipt_id ON price_history("receiptId");
 CREATE INDEX IF NOT EXISTS idx_receipt_files_receipt_id ON receipt_files("receiptId");
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);

@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { query, withTransaction, RECEIPTS_DIR } = require('./database.js');
 const { uploadReceiptBuffer, deleteReceiptObject } = require('../storage/supabaseStorage.js');
+const { hashPassword, normalizeUsername, publicUser, validatePassword } = require('../auth.js');
 
 const bool = (value) => value !== false;
 const toNumber = (value, fallback = 0) => {
@@ -97,6 +98,13 @@ const normalizeInventoryAsset = (row) => row ? ({
   stockQuantity: toNumber(row.stockQuantity, 1),
   depreciationRate: toNumber(row.depreciationRate, 20),
   supplierId: row.supplierId == null ? null : Number(row.supplierId),
+}) : null;
+
+const normalizeUser = (row) => row ? ({
+  ...row,
+  id: Number(row.id),
+  active: Boolean(row.active),
+  approved: Boolean(row.approved),
 }) : null;
 
 async function getAllItems(client) {
@@ -627,6 +635,99 @@ async function getAllInventoryAssets(client) {
   return rows.map(normalizeInventoryAsset);
 }
 
+async function getAllUsers(client) {
+  const { rows } = await query('SELECT * FROM users ORDER BY role DESC, username ASC', [], client);
+  return rows.map(normalizeUser).map(publicUser);
+}
+
+async function getUserById(id, client) {
+  const { rows } = await query('SELECT * FROM users WHERE id = $1', [id], client);
+  return normalizeUser(rows[0]);
+}
+
+async function getUserByUsername(username, client) {
+  const { rows } = await query('SELECT * FROM users WHERE username = $1', [normalizeUsername(username)], client);
+  return normalizeUser(rows[0]);
+}
+
+async function insertUser(payload, client) {
+  const username = normalizeUsername(payload.username);
+  if (!username) {
+    throw new Error('Informe um nome de usuário.');
+  }
+  if (!validatePassword(payload.password)) {
+    throw new Error('A senha precisa ter pelo menos 6 caracteres.');
+  }
+
+  const existing = await getUserByUsername(username, client);
+  if (existing) {
+    throw new Error('Já existe um usuário com esse login.');
+  }
+
+  const { rows } = await query(`
+    INSERT INTO users (name, username, "passwordHash", role, active, approved, "updatedAt")
+    VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+    RETURNING *
+  `, [
+    String(payload.name || '').trim(),
+    username,
+    hashPassword(payload.password),
+    payload.role === 'admin' ? 'admin' : 'user',
+    bool(payload.active),
+    bool(payload.approved),
+  ], client);
+
+  return publicUser(normalizeUser(rows[0]));
+}
+
+async function updateUser(id, payload, client) {
+  const current = await getUserById(id, client);
+  if (!current) {
+    throw new Error('Usuário não encontrado.');
+  }
+
+  const username = normalizeUsername(payload.username ?? current.username);
+  if (!username) {
+    throw new Error('Informe um nome de usuário.');
+  }
+
+  const duplicate = await getUserByUsername(username, client);
+  if (duplicate && duplicate.id !== current.id) {
+    throw new Error('Já existe um usuário com esse login.');
+  }
+
+  if (payload.password != null && payload.password !== '' && !validatePassword(payload.password)) {
+    throw new Error('A senha precisa ter pelo menos 6 caracteres.');
+  }
+
+  const nextPasswordHash = payload.password
+    ? hashPassword(payload.password)
+    : current.passwordHash;
+
+  const { rows } = await query(`
+    UPDATE users
+    SET name = $1,
+        username = $2,
+        "passwordHash" = $3,
+        role = $4,
+        active = $5,
+        approved = $6,
+        "updatedAt" = CURRENT_TIMESTAMP
+    WHERE id = $7
+    RETURNING *
+  `, [
+    String(payload.name ?? current.name).trim(),
+    username,
+    nextPasswordHash,
+    (payload.role ?? current.role) === 'admin' ? 'admin' : 'user',
+    payload.active == null ? current.active : bool(payload.active),
+    payload.approved == null ? current.approved : bool(payload.approved),
+    id,
+  ], client);
+
+  return publicUser(normalizeUser(rows[0]));
+}
+
 async function getInventoryAsset(id, client) {
   const { rows } = await query('SELECT * FROM inventory_assets WHERE id = $1', [id], client);
   return normalizeInventoryAsset(rows[0]);
@@ -977,5 +1078,10 @@ module.exports = {
   insertInventoryAsset,
   updateInventoryAsset,
   deleteInventoryAsset,
+  getAllUsers,
+  getUserById,
+  getUserByUsername,
+  insertUser,
+  updateUser,
   RECEIPTS_DIR,
 };

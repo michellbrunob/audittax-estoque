@@ -10,6 +10,8 @@ const { spawn } = require('child_process');
 const sharp = require('sharp');
 const jsQR = require('jsqr');
 const pdfParse = require('pdf-parse');
+const crypto = require('crypto');
+const { normalizeUsername, publicUser, verifyPassword } = require('./auth.js');
 
 function requireOptional(moduleName) {
   try {
@@ -955,6 +957,12 @@ const Q = require('./db/queries.js');
 const { initDatabase } = require('./db/database.js');
 const { downloadReceiptObject, uploadReceiptBuffer } = require('./storage/supabaseStorage.js');
 const receiptUpload = multer({ storage: multer.memoryStorage() });
+const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
+const AUTH_TOKEN_SECRET = process.env.AUTH_TOKEN_SECRET
+  || process.env.SESSION_SECRET
+  || crypto.createHash('sha256')
+    .update(process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || process.env.SUPABASE_URL || 'audittax-local-secret')
+    .digest('hex');
 
 function toStoredFile(file, label = '') {
   if (!file) return null;
@@ -967,6 +975,146 @@ function toStoredFile(file, label = '') {
 }
 
 const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+
+function getBearerToken(req) {
+  const header = String(req.headers.authorization || '');
+  if (!header.toLowerCase().startsWith('bearer ')) return '';
+  return header.slice(7).trim();
+}
+
+function getRequestToken(req) {
+  return getBearerToken(req) || String(req.query.authToken || '');
+}
+
+function encodeTokenPart(value) {
+  return Buffer.from(JSON.stringify(value)).toString('base64url');
+}
+
+function decodeTokenPart(value) {
+  return JSON.parse(Buffer.from(String(value || ''), 'base64url').toString('utf8'));
+}
+
+function signTokenPayload(payload) {
+  return crypto.createHmac('sha256', AUTH_TOKEN_SECRET).update(payload).digest('base64url');
+}
+
+function createSession(user) {
+  const payload = {
+    userId: Number(user.id),
+    expiresAt: Date.now() + SESSION_TTL_MS,
+  };
+  const encodedPayload = encodeTokenPart(payload);
+  const signature = signTokenPayload(encodedPayload);
+  return `${encodedPayload}.${signature}`;
+}
+
+function readSession(token) {
+  if (!token || !String(token).includes('.')) return null;
+
+  const [encodedPayload, signature] = String(token).split('.');
+  if (!encodedPayload || !signature) return null;
+  if (signTokenPayload(encodedPayload) !== signature) return null;
+
+  try {
+    return decodeTokenPart(encodedPayload);
+  } catch {
+    return null;
+  }
+}
+
+const authRequired = asyncRoute(async (req, res, next) => {
+  const token = getRequestToken(req);
+  const session = readSession(token);
+
+  if (!session || session.expiresAt <= Date.now()) {
+    return res.status(401).json({ error: 'Sessão expirada ou não autenticada.' });
+  }
+
+  const user = await Q.getUserById(session.userId);
+  if (!user) {
+    return res.status(401).json({ error: 'Usuário da sessão não foi encontrado.' });
+  }
+
+  if (!user.active || !user.approved) {
+    return res.status(403).json({ error: 'Seu acesso ao sistema está bloqueado no momento.' });
+  }
+
+  req.authToken = token;
+  req.authUser = publicUser(user);
+  return next();
+});
+
+function adminRequired(req, res, next) {
+  if (req.authUser?.role !== 'admin') {
+    return res.status(403).json({ error: 'Apenas administradores podem acessar este módulo.' });
+  }
+  return next();
+}
+
+app.post('/api/auth/login', asyncRoute(async (req, res) => {
+  const username = normalizeUsername(req.body?.username);
+  const password = String(req.body?.password || '');
+  const user = await Q.getUserByUsername(username);
+
+  if (!user || !verifyPassword(password, user.passwordHash)) {
+    return res.status(401).json({ error: 'Usuário ou senha inválidos.' });
+  }
+
+  if (!user.active) {
+    return res.status(403).json({ error: 'Seu usuário está desativado. Procure o administrador.' });
+  }
+
+  if (!user.approved) {
+    return res.status(403).json({ error: 'Seu usuário ainda não foi liberado pelo administrador.' });
+  }
+
+  const token = createSession(user);
+  return res.json({ token, user: publicUser(user) });
+}));
+
+app.use((req, res, next) => {
+  if (req.path === '/api/auth/login') return next();
+  if (req.path === '/nfce/health') return next();
+  if (req.path.startsWith('/api/') || req.path === '/api/state' || req.path.startsWith('/nfce/')) {
+    return authRequired(req, res, next);
+  }
+  return next();
+});
+
+app.get('/api/auth/session', asyncRoute(async (req, res) => {
+  res.json({ user: req.authUser });
+}));
+
+app.post('/api/auth/logout', asyncRoute(async (req, res) => {
+  res.json({ ok: true });
+}));
+
+app.get('/api/users', adminRequired, asyncRoute(async (_req, res) => {
+  res.json(await Q.getAllUsers());
+}));
+
+app.post('/api/users', adminRequired, asyncRoute(async (req, res) => {
+  try {
+    res.json(await Q.insertUser(req.body));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+}));
+
+app.put('/api/users/:id', adminRequired, asyncRoute(async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (
+      req.authUser?.id === id
+      && (req.body?.role === 'user' || req.body?.active === false || req.body?.approved === false)
+    ) {
+      return res.status(400).json({ error: 'O administrador logado não pode remover o próprio acesso.' });
+    }
+    res.json(await Q.updateUser(id, req.body));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+}));
 
 // Estado completo (carga inicial)
 app.get('/api/state', asyncRoute(async (_, res) => {

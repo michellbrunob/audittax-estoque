@@ -1029,6 +1029,7 @@ const screens = [
   ['inventory', 'Inventário TI', 'Predial'],
   ['receipts', 'Comprovantes', 'Administracao'],
   ['suppliers', 'Fornecedores', 'Administracao'],
+  ['users', 'Usuários', 'Administracao'],
   ['settings', 'Configurações', 'Administracao']
 ];
 
@@ -1051,6 +1052,9 @@ const createEmptyReaderState = () => ({
 function App() {
   const [state, setState] = useState(initialState);
   const [dbReady, setDbReady] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [users, setUsers] = useState([]);
   const [screen, setScreen] = useState('dashboard');
   const [purchaseListDraft, setPurchaseListDraft] = useState(() => mergePurchaseListDraft(initialState.items));
   const [flash, setFlash] = useState(null);
@@ -1062,38 +1066,72 @@ function App() {
   const readerFileRef = useRef(null); // guarda File original para upload ao backend
   const readerAttachmentRef = useRef(null);
 
-  // Carga inicial: SQLite para state, com migracao autom?tica do localStorage
+  // Sessão inicial + carga do estado após autenticação
   useEffect(() => {
-    import('./api.js').then(({ default: api }) => {
-      window.__api = api; // disponibiliza globalmente para CRUD
-      api.getState().then((serverState) => {
+    let cancelled = false;
+
+    import('./api.js').then(async ({ default: api }) => {
+      window.__api = api;
+
+      try {
+        const session = await api.getSession();
+        if (cancelled) return;
+
+        const user = session?.user || null;
+        setCurrentUser(user);
+
+        const serverState = await api.getState();
+        if (cancelled) return;
+
         const hasData = serverState && (serverState.items?.length > 0 || serverState.suppliers?.length > 0 || serverState.receipts?.length > 0);
         if (hasData) {
           setState(hydrateState(serverState));
-          setDbReady(true);
         } else {
-          // Tenta migrar localStorage
           const stored = localStorage.getItem(STORAGE_KEY);
           if (stored) {
             try {
               const parsed = JSON.parse(stored);
-              api.migrate(parsed).then(() => api.getState()).then((fresh) => {
-                setState(hydrateState(fresh));
-                localStorage.removeItem(STORAGE_KEY);
-                setDbReady(true);
-              }).catch(() => { setState(hydrateState(parsed)); setDbReady(true); });
-            } catch { setDbReady(true); }
-          } else { setDbReady(true); }
+              await api.migrate(parsed);
+              const fresh = await api.getState();
+              if (cancelled) return;
+              setState(hydrateState(fresh));
+              localStorage.removeItem(STORAGE_KEY);
+            } catch {
+              setState(hydrateState(initialState));
+            }
+          }
         }
-      }).catch(() => {
-        // Fallback: backend indisponivel, tenta localStorage
-        try {
-          const stored = localStorage.getItem(STORAGE_KEY);
-          if (stored) setState(hydrateState(JSON.parse(stored)));
-        } catch { /* noop */ }
+
+        if (user?.role === 'admin') {
+          try {
+            const userList = await api.getUsers();
+            if (!cancelled) setUsers(userList);
+          } catch {
+            if (!cancelled) setUsers([]);
+          }
+        }
+      } catch {
+        api.clearAuth();
+        if (!cancelled) {
+          setCurrentUser(null);
+          setUsers([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setAuthReady(true);
+          setDbReady(true);
+        }
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setAuthReady(true);
         setDbReady(true);
-      });
+      }
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
   useEffect(() => () => clearTimeout(timer.current), []);
   useEffect(() => {
@@ -1135,10 +1173,40 @@ function App() {
   const showFlash = (message, tone = 'success') => { setFlash({ message, tone }); clearTimeout(timer.current); timer.current = setTimeout(() => setFlash(null), 3200); };
 
   const showFlashErr = (e) => { console.error('API error:', e); showFlash(e?.error || e?.message || 'Erro na operacao.', 'error'); };
+  const logout = (message = '') => {
+    window.__api?.clearAuth?.();
+    setCurrentUser(null);
+    setUsers([]);
+    setScreen('dashboard');
+    if (message) showFlash(message, 'error');
+  };
+  const loadUsers = () => {
+    if (currentUser?.role !== 'admin' || !window.__api) return Promise.resolve([]);
+    return window.__api.getUsers().then((list) => {
+      setUsers(list);
+      return list;
+    });
+  };
+  const refreshState = () => {
+    if (!window.__api) return Promise.resolve();
+    return window.__api.getState().then((fresh) => {
+      setState(hydrateState(fresh));
+      return currentUser?.role === 'admin' ? loadUsers() : [];
+    });
+  };
   // Helper: chama API e recarrega state completo
   const apiCall = (fn, successMsg) => {
     if (!window.__api) return showFlash('Backend nao conectado. Reinicie o servidor.', 'error');
-    return fn.then(() => window.__api.getState()).then((fresh) => { setState(hydrateState(fresh)); if (successMsg) showFlash(successMsg); }).catch(showFlashErr);
+    return fn
+      .then(() => refreshState())
+      .then(() => { if (successMsg) showFlash(successMsg); })
+      .catch((error) => {
+        if (error?.error?.includes('Sessão') || error?.error?.includes('autenticada')) {
+          logout('Sua sessão expirou. Faça login novamente.');
+          return;
+        }
+        showFlashErr(error);
+      });
   };
 
   const addItem = (payload) => apiCall(window.__api.addItem(payload), 'Item cadastrado.');
@@ -1181,7 +1249,7 @@ function App() {
   const deleteSupplier = (supplierId) => {
     window.__api.deleteSupplier(supplierId).then((r) => {
       if (r.error) return showFlash('Este fornecedor ja possui historico vinculado e nao pode ser excluido.', 'error');
-      return window.__api.getState().then((fresh) => { setState(hydrateState(fresh)); showFlash('Fornecedor excluido.'); });
+      return refreshState().then(() => { showFlash('Fornecedor excluido.'); });
     }).catch(showFlashErr);
   };
   const updateCycle = (payload) => apiCall(window.__api.updateCycle(payload), 'Ciclo atualizado.');
@@ -1360,10 +1428,15 @@ function App() {
     const API_BASE = window.__api
       ? (window.__api.receiptFileUrl(0).replace(/\/api\/receipts\/0\/file$/, ''))
       : 'http://127.0.0.1:3333';
-    fetch(`${API_BASE}/api/import-receipt`, { method: 'POST', body: fd })
+    fetch(`${API_BASE}/api/import-receipt`, {
+      method: 'POST',
+      headers: window.__api?.getAuthToken?.() ? { Authorization: `Bearer ${window.__api.getAuthToken()}` } : {},
+      body: fd
+    })
       .then((r) => r.json())
       .then((result) => {
         if (result.state) setState(hydrateState(result.state));
+        if (currentUser?.role === 'admin') loadUsers().catch(() => {});
         showFlash('Itens importados do comprovante.');
       })
       .catch((e) => showFlash(e?.message || 'Erro ao importar.', 'error'));
@@ -1375,17 +1448,85 @@ function App() {
 
   const cycleProgress = Math.max(0, Math.min(100, (diffDays(new Date(), new Date(`${state.cycle.lastPurchaseDate}T00:00:00`)) / Number(state.cycle.intervalDays || 1)) * 100));
   const groups = ['Visão geral', 'Estoque', 'Analise', 'Predial', 'Administracao'];
+  const visibleScreens = screens.filter(([id]) => currentUser?.role === 'admin' || id !== 'users');
+  const activeScreen = visibleScreens.some(([id]) => id === screen) ? screen : 'dashboard';
+
+  useEffect(() => {
+    if (screen !== activeScreen) {
+      setScreen(activeScreen);
+    }
+  }, [screen, activeScreen]);
+
+  const handleLogin = (credentials) => {
+    if (!window.__api) return Promise.reject(new Error('API nao carregada.'));
+    return window.__api.login(credentials.username, credentials.password).then(async (result) => {
+      setCurrentUser(result.user);
+      const fresh = await window.__api.getState();
+      setState(hydrateState(fresh));
+      if (result.user?.role === 'admin') {
+        try {
+          setUsers(await window.__api.getUsers());
+        } catch {
+          setUsers([]);
+        }
+      } else {
+        setUsers([]);
+      }
+      setScreen('dashboard');
+      showFlash(`Bem-vindo, ${result.user?.name || result.user?.username}.`);
+    });
+  };
+
+  const handleLogout = () => {
+    const run = window.__api?.logout ? window.__api.logout() : Promise.resolve();
+    run.finally(() => {
+      window.__api?.clearAuth?.();
+      setCurrentUser(null);
+      setUsers([]);
+      setScreen('dashboard');
+      showFlash('Sessão encerrada.');
+    });
+  };
+
+  const handleCreateUser = (payload) => {
+    if (!window.__api) return Promise.reject(new Error('API nao carregada.'));
+    return window.__api.addUser(payload)
+      .then(() => loadUsers())
+      .then(() => showFlash('Usuário cadastrado.'))
+      .catch((error) => { showFlashErr(error); throw error; });
+  };
+
+  const handleUpdateUser = (userId, payload) => {
+    if (!window.__api) return Promise.reject(new Error('API nao carregada.'));
+    return window.__api.updateUser(userId, payload)
+      .then(() => loadUsers())
+      .then(() => showFlash('Usuário atualizado.'))
+      .catch((error) => { showFlashErr(error); throw error; });
+  };
+
+  if (!authReady || !dbReady) {
+    return <LoadingScreen />;
+  }
+
+  if (!currentUser) {
+    return <LoginScreen onSubmit={handleLogin} flash={flash} />;
+  }
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><div className="brand-lockup"><div className="brand-logo-shell"><img src={audittaxLogo} alt="Audittax Gestão Integrada" className="brand-logo" /></div><div><span className="brand-kicker">Audittax</span><h1>Gestão Integrada</h1><p className="brand-subtitle">Operação, estoque, patrimônio e manutenção em uma gestão interna unificada.</p></div></div></div>
-        {groups.map((group) => <div className="nav-group" key={group}><span className="nav-label">{group}</span>{screens.filter((screenItem) => screenItem[2] === group).map(([id, label]) => <button key={id} className={`nav-item ${screen === id ? 'active' : ''}`} onClick={() => { setScreen(id); if (id === 'dashboard') setAlertsLastSeen(lowStockItems.length); }}><span>{label}</span>{id === 'dashboard' && lowStockItems.length > alertsLastSeen ? <span className="nav-pill">{lowStockItems.length}</span> : null}{id === 'maintenance' && maintOverdue > 0 ? <span className="nav-pill">{maintOverdue}</span> : null}</button>)}</div>)}
+        <div className="session-card">
+          <strong>{currentUser.name || currentUser.username}</strong>
+          <span>{currentUser.role === 'admin' ? 'Administrador' : 'Usuário autorizado'}</span>
+          <button className="ghost-button session-button" type="button" onClick={handleLogout}>Sair</button>
+        </div>
+        {groups.map((group) => <div className="nav-group" key={group}><span className="nav-label">{group}</span>{visibleScreens.filter((screenItem) => screenItem[2] === group).map(([id, label]) => <button key={id} className={`nav-item ${activeScreen === id ? 'active' : ''}`} onClick={() => { setScreen(id); if (id === 'dashboard') setAlertsLastSeen(lowStockItems.length); }}><span>{label}</span>{id === 'dashboard' && lowStockItems.length > alertsLastSeen ? <span className="nav-pill">{lowStockItems.length}</span> : null}{id === 'maintenance' && maintOverdue > 0 ? <span className="nav-pill">{maintOverdue}</span> : null}{id === 'users' && users.filter((user) => !user.approved || !user.active).length > 0 ? <span className="nav-pill">{users.filter((user) => !user.approved || !user.active).length}</span> : null}</button>)}</div>)}
       </aside>
       <main className="main">
-        <header className="topbar"><div><p className="eyebrow">Audittax Gestão Integrada</p><h2>{screens.find((screenItem) => screenItem[0] === screen)?.[1]}</h2>{screen === 'dashboard' ? <p className="subtle">{state.items.length} itens cadastrados, próxima compra em {formatDate(safeIsoDate(nextPurchaseDate))}</p> : <p className="subtle">Plataforma integrada para estoque administrativo, limpeza, TI e manutenção predial.</p>}</div>{flash ? <div className={`flash ${flash.tone}`}>{flash.message}</div> : null}</header>
+        <header className="topbar"><div><p className="eyebrow">Audittax Gestão Integrada</p><h2>{visibleScreens.find((screenItem) => screenItem[0] === activeScreen)?.[1]}</h2>{activeScreen === 'dashboard' ? <p className="subtle">{state.items.length} itens cadastrados, próxima compra em {formatDate(safeIsoDate(nextPurchaseDate))}</p> : <p className="subtle">Plataforma integrada para estoque administrativo, limpeza, TI e manutenção predial.</p>}</div>{flash ? <div className={`flash ${flash.tone}`}>{flash.message}</div> : null}</header>
 
-        {screen === 'dashboard' ? <><div className="metrics"><MetricCard label="Itens ativos" value={state.items.length} /><MetricCard label="Abaixo do minimo" value={lowStockItems.length} tone={lowStockItems.length ? 'danger' : 'success'} /><MetricCard label="Nao chegam ate a compra" value={vulnerableItems.length} tone={vulnerableItems.length ? 'warn' : 'success'} /><MetricCard label="Custo extra no ciclo" value={currency(state.extraPurchases.reduce((sum, entry) => sum + entry.cost, 0))} tone="warn" /></div><div className="panel-grid"><section className="panel"><div className="panel-head"><div><h3>Alertas automaticos</h3><p>Compra geral prevista para {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><Badge tone={daysUntilNextPurchase <= 7 ? 'danger' : 'info'}>{daysUntilNextPurchase} dias restantes</Badge></div>{!lowStockItems.length && !vulnerableItems.length ? <EmptyState text="Nenhum alerta no momento." /> : <div className="stack">{lowStockItems.map((item) => <AlertCard key={`low-${item.id}`} tone="danger" title={`${item.name} abaixo do estoque minimo`} text={`Atual ${item.quantity} ${item.unit}. Minimo ${item.minStock} ${item.unit}.`} />)}{vulnerableItems.map((item) => <AlertCard key={`vul-${item.id}`} tone="warn" title={`${item.name} nao chega ate a próxima compra`} text={`Duracao estimada: ${durationForItem(item)} dias.`} />)}</div>}</section><section className="panel"><div className="panel-head"><div><h3>Últimas movimentações</h3><p>Entradas, saidas e reposições avulsas</p></div></div><div className="stack">{[...state.movements].slice(-6).reverse().map((entry) => <div className="history-row" key={entry.id}><span className={`dot ${entry.type}`}></span><div className="history-main"><strong>{entry.type === 'entrada' ? '+' : '-'}{entry.quantity}</strong> {itemsById[entry.itemId]?.name || 'Item removido'} <span className="sub-note">{entry.notes}</span></div><span className="mono">{formatDate(entry.date)}</span></div>)}</div></section></div></> : null}
+        {activeScreen === 'dashboard' ? <><div className="metrics"><MetricCard label="Itens ativos" value={state.items.length} /><MetricCard label="Abaixo do minimo" value={lowStockItems.length} tone={lowStockItems.length ? 'danger' : 'success'} /><MetricCard label="Nao chegam ate a compra" value={vulnerableItems.length} tone={vulnerableItems.length ? 'warn' : 'success'} /><MetricCard label="Custo extra no ciclo" value={currency(state.extraPurchases.reduce((sum, entry) => sum + entry.cost, 0))} tone="warn" /></div><div className="panel-grid"><section className="panel"><div className="panel-head"><div><h3>Alertas automaticos</h3><p>Compra geral prevista para {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><Badge tone={daysUntilNextPurchase <= 7 ? 'danger' : 'info'}>{daysUntilNextPurchase} dias restantes</Badge></div>{!lowStockItems.length && !vulnerableItems.length ? <EmptyState text="Nenhum alerta no momento." /> : <div className="stack">{lowStockItems.map((item) => <AlertCard key={`low-${item.id}`} tone="danger" title={`${item.name} abaixo do estoque minimo`} text={`Atual ${item.quantity} ${item.unit}. Minimo ${item.minStock} ${item.unit}.`} />)}{vulnerableItems.map((item) => <AlertCard key={`vul-${item.id}`} tone="warn" title={`${item.name} nao chega ate a próxima compra`} text={`Duracao estimada: ${durationForItem(item)} dias.`} />)}</div>}</section><section className="panel"><div className="panel-head"><div><h3>Últimas movimentações</h3><p>Entradas, saidas e reposições avulsas</p></div></div><div className="stack">{[...state.movements].slice(-6).reverse().map((entry) => <div className="history-row" key={entry.id}><span className={`dot ${entry.type}`}></span><div className="history-main"><strong>{entry.type === 'entrada' ? '+' : '-'}{entry.quantity}</strong> {itemsById[entry.itemId]?.name || 'Item removido'} <span className="sub-note">{entry.notes}</span></div><span className="mono">{formatDate(entry.date)}</span></div>)}</div></section></div></> : null}
 
         {screen === 'cycle' ? <><section className={`panel cycle-banner ${daysUntilNextPurchase <= 7 ? 'danger' : daysUntilNextPurchase <= 20 ? 'warn' : 'success'}`}><div><p className="eyebrow">Próxima compra geral</p><h3>{daysUntilNextPurchase} dias</h3><p>Data prevista: {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><div className="cycle-meter"><div className="progress"><span style={{ width: `${cycleProgress}%` }}></span></div><p>Custo extra no ciclo atual: {currency(state.extraPurchases.filter((entry) => new Date(`${entry.date}T00:00:00`) >= new Date(`${state.cycle.lastPurchaseDate}T00:00:00`)).reduce((sum, entry) => sum + entry.cost, 0))}</p></div></section><section className="panel"><div className="panel-head"><div><h3>Itens vs próxima compra</h3><p>Quais itens aguentam ate o fechamento do ciclo</p></div></div><div className="table-wrap"><table><thead><tr><th>Item</th><th>Estoque</th><th>Esgota em</th><th>Dias restantes</th><th>Situacao</th></tr></thead><tbody>{state.items.map((item) => { const days = durationForItem(item); return <tr key={item.id}><td>{item.name}</td><td>{item.quantity} {item.unit}</td><td>{Number.isFinite(days) ? `${days} dias` : 'Sem consumo'}</td><td>{daysUntilNextPurchase}</td><td><Badge tone={days >= daysUntilNextPurchase ? 'success' : 'warn'}>{days >= daysUntilNextPurchase ? 'Aguenta o ciclo' : 'Precisa repor'}</Badge></td></tr>; })}</tbody></table></div></section></> : null}
 
@@ -1405,7 +1546,8 @@ function App() {
         {screen === 'inventory' ? <InventoryPanel assets={state.inventoryAssets} suppliers={state.suppliers} onAddAsset={addInventoryAsset} onUpdateAsset={updateInventoryAsset} onDeleteAsset={deleteInventoryAsset} /> : null}
         {screen === 'receipts' ? <ReceiptsPanel receipts={state.receipts} onAdd={addReceipt} onDelete={deleteReceipt} suppliersById={suppliersById} /> : null}
         {screen === 'suppliers' ? <SuppliersPanel suppliers={state.suppliers} priceHistory={state.priceHistory} extraPurchases={state.extraPurchases} onSubmit={addSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} /> : null}
-        {screen === 'settings' ? <SettingsPanel state={state} nextPurchaseDate={nextPurchaseDate} onSaveCycle={updateCycle} onSaveSettings={saveSettings} onUpdateConsumption={updateConsumption} /> : null}
+        {activeScreen === 'settings' ? <SettingsPanel state={state} nextPurchaseDate={nextPurchaseDate} onSaveCycle={updateCycle} onSaveSettings={saveSettings} onUpdateConsumption={updateConsumption} /> : null}
+        {activeScreen === 'users' ? <UsersPanel users={users} currentUser={currentUser} onCreate={handleCreateUser} onUpdate={handleUpdateUser} /> : null}
       </main>
     </div>
   );
@@ -2832,6 +2974,136 @@ function ConsumptionPanel({ items }) {
         <div className="alert-card"><strong>- (não mapeado) -</strong> Produto não encontrado no catálogo. Cadastre o item em <em>Itens</em> para monitorar o estoque.</div>
         <p className="subtle" style={{ fontSize: '12px', marginTop: '4px' }}>Aviso: os itens com unidade em mL ou g são estimativas brutas. Se o catálogo registra em litros ou kg, verifique a equivalência manualmente.</p>
       </div>
+    </section>
+  </>;
+}
+function LoadingScreen() {
+  return <div className="auth-shell">
+    <div className="auth-card">
+      <span className="brand-kicker">Audittax</span>
+      <h2>Carregando sistema</h2>
+      <p className="subtle">Validando sessão e preparando os módulos internos.</p>
+    </div>
+  </div>;
+}
+
+function LoginScreen({ onSubmit, flash }) {
+  const [form, setForm] = useState({ username: '', password: '' });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+
+    try {
+      await onSubmit(form);
+    } catch (e) {
+      setError(e?.error || e?.message || 'Falha ao entrar no sistema.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return <div className="auth-shell">
+    <form className="auth-card" onSubmit={handleSubmit}>
+      <div className="brand-lockup">
+        <div className="brand-logo-shell"><img src={audittaxLogo} alt="Audittax Gestão Integrada" className="brand-logo" /></div>
+        <div>
+          <span className="brand-kicker">Audittax</span>
+          <h2>Acesso restrito</h2>
+          <p className="subtle">Entre com login e senha liberados pelo administrador.</p>
+        </div>
+      </div>
+      {flash ? <div className={`flash ${flash.tone}`}>{flash.message}</div> : null}
+      {error ? <div className="flash error">{error}</div> : null}
+      <div className="form-grid auth-form-grid">
+        <Field label="Usuário"><input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} autoComplete="username" /></Field>
+        <Field label="Senha"><input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} autoComplete="current-password" /></Field>
+      </div>
+      <div className="actions-row">
+        <button className="primary-button" type="submit" disabled={loading}>{loading ? 'Entrando...' : 'Entrar'}</button>
+      </div>
+      <p className="subtle">Acesso inicial do sistema: usuário <strong>administrador</strong>.</p>
+    </form>
+  </div>;
+}
+
+function UsersPanel({ users, currentUser, onCreate, onUpdate }) {
+  const [form, setForm] = useState({ name: '', username: '', password: '', role: 'user', approved: false, active: true });
+  const [drafts, setDrafts] = useState({});
+
+  useEffect(() => {
+    setDrafts(Object.fromEntries(users.map((user) => [user.id, { ...user, password: '' }])));
+  }, [users]);
+
+  const blockedCount = users.filter((user) => !user.approved || !user.active).length;
+
+  const submitCreate = async (event) => {
+    event.preventDefault();
+    await onCreate(form);
+    setForm({ name: '', username: '', password: '', role: 'user', approved: false, active: true });
+  };
+
+  return <>
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h3>Gestão de usuários</h3>
+          <p>Cadastre logins, libere acessos e defina quem pode administrar o sistema.</p>
+        </div>
+        <Badge tone={blockedCount ? 'warn' : 'success'}>{blockedCount ? `${blockedCount} pendente(s)` : 'Todos liberados'}</Badge>
+      </div>
+      <form className="form-grid" onSubmit={submitCreate}>
+        <Field label="Nome"><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Nome do colaborador" /></Field>
+        <Field label="Usuário"><input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="login" /></Field>
+        <Field label="Senha inicial"><input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="mínimo 6 caracteres" /></Field>
+        <Field label="Perfil"><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="user">Usuário</option><option value="admin">Administrador</option></select></Field>
+        <Field label="Liberado"><select value={form.approved ? 'true' : 'false'} onChange={(event) => setForm({ ...form, approved: event.target.value === 'true' })}><option value="false">Não</option><option value="true">Sim</option></select></Field>
+        <Field label="Ativo"><select value={form.active ? 'true' : 'false'} onChange={(event) => setForm({ ...form, active: event.target.value === 'true' })}><option value="true">Sim</option><option value="false">Não</option></select></Field>
+        <div className="actions-row"><button className="primary-button" type="submit" disabled={!form.username.trim() || !form.password.trim()}>Cadastrar usuário</button></div>
+      </form>
+    </section>
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h3>Usuários cadastrados</h3>
+          <p>Libere, bloqueie, promova para administrador ou redefina a senha quando precisar.</p>
+        </div>
+      </div>
+      {!users.length ? <EmptyState text="Nenhum usuário cadastrado além do administrador inicial." /> : <div className="stack">
+        {users.map((user) => {
+          const draft = drafts[user.id] || { ...user, password: '' };
+          const isSelf = currentUser?.id === user.id;
+
+          return <div className="entry-card" key={user.id}>
+            <div className="panel-head" style={{ marginBottom: '12px' }}>
+              <div>
+                <strong>{user.name || user.username}</strong>
+                <p>{user.username}</p>
+              </div>
+              <div className="entry-meta">
+                <Badge tone={user.role === 'admin' ? 'info' : 'neutral'}>{user.role === 'admin' ? 'Administrador' : 'Usuário'}</Badge>
+                <Badge tone={user.approved ? 'success' : 'warn'}>{user.approved ? 'Liberado' : 'Pendente'}</Badge>
+                <Badge tone={user.active ? 'success' : 'danger'}>{user.active ? 'Ativo' : 'Bloqueado'}</Badge>
+              </div>
+            </div>
+            <div className="form-grid">
+              <Field label="Nome"><input value={draft.name || ''} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, name: event.target.value } }))} /></Field>
+              <Field label="Usuário"><input value={draft.username || ''} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, username: event.target.value } }))} /></Field>
+              <Field label="Nova senha"><input type="password" value={draft.password || ''} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, password: event.target.value } }))} placeholder="Preencha só se quiser trocar" /></Field>
+              <Field label="Perfil"><select value={draft.role || 'user'} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, role: event.target.value } }))} disabled={isSelf}><option value="user">Usuário</option><option value="admin">Administrador</option></select></Field>
+              <Field label="Liberado"><select value={draft.approved ? 'true' : 'false'} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, approved: event.target.value === 'true' } }))} disabled={isSelf}><option value="false">Não</option><option value="true">Sim</option></select></Field>
+              <Field label="Ativo"><select value={draft.active ? 'true' : 'false'} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, active: event.target.value === 'true' } }))} disabled={isSelf}><option value="true">Sim</option><option value="false">Não</option></select></Field>
+            </div>
+            <div className="actions-row" style={{ marginTop: '12px' }}>
+              <button className="primary-button" type="button" onClick={() => onUpdate(user.id, draft)}>Salvar alterações</button>
+              {isSelf ? <span className="subtle">Seu próprio perfil permanece como administrador.</span> : null}
+            </div>
+          </div>;
+        })}
+      </div>}
     </section>
   </>;
 }
