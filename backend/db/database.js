@@ -78,7 +78,13 @@ async function initDatabase() {
   await query(`
     INSERT INTO users (name, username, "passwordHash", role, active, approved)
     VALUES ($1, $2, $3, 'admin', TRUE, TRUE)
-    ON CONFLICT (username) DO NOTHING;
+    ON CONFLICT (username) DO UPDATE
+    SET name = EXCLUDED.name,
+        "passwordHash" = EXCLUDED."passwordHash",
+        role = 'admin',
+        active = TRUE,
+        approved = TRUE,
+        "updatedAt" = CURRENT_TIMESTAMP;
   `, [adminName, adminUsername, hashPassword(adminPassword)]);
 }
 
