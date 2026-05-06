@@ -2,6 +2,50 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {
+      "source": "/api/state",
+      "destination": "/api/app/state"
+    },
+    {
+      "source": "/api/migrate",
+      "destination": "/api/app/migrate"
+    },
+    {
+      "source": "/api/movements",
+      "destination": "/api/app/movements"
+    },
+    {
+      "source": "/api/prices",
+      "destination": "/api/app/prices"
+    },
+    {
+      "source": "/api/extras",
+      "destination": "/api/app/extras"
+    },
+    {
+      "source": "/api/cycle",
+      "destination": "/api/app/cycle"
+    },
+    {
+      "source": "/api/settings",
+      "destination": "/api/app/settings"
+    },
+    {
+      "source": "/api/receipt-file",
+      "destination": "/api/app/receipt-file"
+    },
+    {
+      "source": "/api/import-receipt",
+      "destination": "/api/app/import-receipt"
+    },
+    {
+      "source": "/api/users",
+      "destination": "/api/app/users"
+    },
+    {
+      "source": "/api/users/(.*)",
+      "destination": "/api/app/users/$1"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

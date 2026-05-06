@@ -13,13 +13,21 @@ function normalizeApiUrl(req) {
   req.url = `/api${prefix}${req.url}`;
 }
 
-export default async function handler(req, res) {
-  normalizeApiUrl(req);
+export function createHandler(rewriteUrl) {
+  return async function handler(req, res) {
+    if (typeof rewriteUrl === 'function') {
+      req.url = rewriteUrl(req.url || '', req);
+    } else {
+      normalizeApiUrl(req);
+    }
 
-  if (!initPromise) {
-    initPromise = initDatabase();
-  }
+    if (!initPromise) {
+      initPromise = initDatabase();
+    }
 
-  await initPromise;
-  return app(req, res);
+    await initPromise;
+    return app(req, res);
+  };
 }
+
+export default createHandler();
