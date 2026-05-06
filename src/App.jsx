@@ -3031,19 +3031,64 @@ function LoginScreen({ onSubmit, flash }) {
 }
 
 function UsersPanel({ users, currentUser, onCreate, onUpdate }) {
-  const [form, setForm] = useState({ name: '', username: '', password: '', role: 'user', approved: false, active: true });
+  const emptyForm = { name: '', username: '', password: '', role: 'user', approved: false, active: true };
+  const [form, setForm] = useState(emptyForm);
   const [drafts, setDrafts] = useState({});
+  const [editingId, setEditingId] = useState(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [passwordModal, setPasswordModal] = useState(null);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
 
   useEffect(() => {
     setDrafts(Object.fromEntries(users.map((user) => [user.id, { ...user, password: '' }])));
   }, [users]);
 
-  const blockedCount = users.filter((user) => !user.approved || !user.active).length;
+  const adminsCount = users.filter((user) => user.role === 'admin').length;
+  const pendingCount = users.filter((user) => !user.approved).length;
+  const blockedCount = users.filter((user) => !user.active).length;
+  const activeCount = users.filter((user) => user.active && user.approved).length;
+
+  const normalizedSearch = slug(search);
+  const filteredUsers = users.filter((user) => {
+    const matchesSearch = !normalizedSearch || slug(`${user.name} ${user.username}`).includes(normalizedSearch);
+    if (!matchesSearch) return false;
+    if (filter === 'pending') return !user.approved;
+    if (filter === 'blocked') return !user.active;
+    if (filter === 'admins') return user.role === 'admin';
+    if (filter === 'active') return user.active && user.approved;
+    return true;
+  });
+
+  const openEdit = (user) => {
+    setEditingId(user.id);
+    setDrafts((current) => ({ ...current, [user.id]: { ...user, password: '' } }));
+  };
+
+  const cancelEdit = (user) => {
+    setEditingId(null);
+    setDrafts((current) => ({ ...current, [user.id]: { ...user, password: '' } }));
+  };
+
+  const saveEdit = async (user) => {
+    const draft = drafts[user.id];
+    await onUpdate(user.id, draft);
+    setEditingId(null);
+    setPasswordModal(null);
+  };
 
   const submitCreate = async (event) => {
     event.preventDefault();
     await onCreate(form);
-    setForm({ name: '', username: '', password: '', role: 'user', approved: false, active: true });
+    setForm(emptyForm);
+    setCreateOpen(false);
+  };
+
+  const submitPasswordReset = async (event) => {
+    event.preventDefault();
+    if (!passwordModal?.password?.trim()) return;
+    await onUpdate(passwordModal.user.id, { ...passwordModal.user, password: passwordModal.password });
+    setPasswordModal(null);
   };
 
   return <>
@@ -3051,60 +3096,144 @@ function UsersPanel({ users, currentUser, onCreate, onUpdate }) {
       <div className="panel-head">
         <div>
           <h3>Gestão de usuários</h3>
-          <p>Cadastre logins, libere acessos e defina quem pode administrar o sistema.</p>
+          <p>Cadastre logins, libere acesso e defina quem pode administrar o sistema.</p>
         </div>
-        <Badge tone={blockedCount ? 'warn' : 'success'}>{blockedCount ? `${blockedCount} pendente(s)` : 'Todos liberados'}</Badge>
+        <div className="actions-row">
+          <Badge tone={pendingCount || blockedCount ? 'warn' : 'success'}>{pendingCount || blockedCount ? `${pendingCount + blockedCount} com atenção` : 'Todos liberados'}</Badge>
+          <button className="primary-button" type="button" onClick={() => setCreateOpen(true)}>+ Novo usuário</button>
+        </div>
       </div>
-      <form className="form-grid" onSubmit={submitCreate}>
-        <Field label="Nome"><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Nome do colaborador" /></Field>
-        <Field label="Usuário"><input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="login" /></Field>
-        <Field label="Senha inicial"><input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="mínimo 6 caracteres" /></Field>
-        <Field label="Perfil"><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="user">Usuário</option><option value="admin">Administrador</option></select></Field>
-        <Field label="Liberado"><select value={form.approved ? 'true' : 'false'} onChange={(event) => setForm({ ...form, approved: event.target.value === 'true' })}><option value="false">Não</option><option value="true">Sim</option></select></Field>
-        <Field label="Ativo"><select value={form.active ? 'true' : 'false'} onChange={(event) => setForm({ ...form, active: event.target.value === 'true' })}><option value="true">Sim</option><option value="false">Não</option></select></Field>
-        <div className="actions-row"><button className="primary-button" type="submit" disabled={!form.username.trim() || !form.password.trim()}>Cadastrar usuário</button></div>
-      </form>
+      <div className="metrics users-metrics">
+        <MetricCard label="Total" value={users.length} />
+        <MetricCard label="Liberados" value={activeCount} tone={activeCount ? 'success' : 'neutral'} />
+        <MetricCard label="Pendentes" value={pendingCount} tone={pendingCount ? 'warn' : 'success'} />
+        <MetricCard label="Admins" value={adminsCount} tone="info" />
+      </div>
     </section>
+
     <section className="panel">
       <div className="panel-head">
         <div>
           <h3>Usuários cadastrados</h3>
-          <p>Libere, bloqueie, promova para administrador ou redefina a senha quando precisar.</p>
+          <p>Edite apenas quando necessário. Senha fica em ação separada para reduzir ruído visual.</p>
         </div>
       </div>
-      {!users.length ? <EmptyState text="Nenhum usuário cadastrado além do administrador inicial." /> : <div className="stack">
-        {users.map((user) => {
-          const draft = drafts[user.id] || { ...user, password: '' };
-          const isSelf = currentUser?.id === user.id;
 
-          return <div className="entry-card" key={user.id}>
-            <div className="panel-head" style={{ marginBottom: '12px' }}>
-              <div>
-                <strong>{user.name || user.username}</strong>
-                <p>{user.username}</p>
-              </div>
-              <div className="entry-meta">
-                <Badge tone={user.role === 'admin' ? 'info' : 'neutral'}>{user.role === 'admin' ? 'Administrador' : 'Usuário'}</Badge>
-                <Badge tone={user.approved ? 'success' : 'warn'}>{user.approved ? 'Liberado' : 'Pendente'}</Badge>
-                <Badge tone={user.active ? 'success' : 'danger'}>{user.active ? 'Ativo' : 'Bloqueado'}</Badge>
-              </div>
-            </div>
-            <div className="form-grid">
-              <Field label="Nome"><input value={draft.name || ''} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, name: event.target.value } }))} /></Field>
-              <Field label="Usuário"><input value={draft.username || ''} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, username: event.target.value } }))} /></Field>
-              <Field label="Nova senha"><input type="password" value={draft.password || ''} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, password: event.target.value } }))} placeholder="Preencha só se quiser trocar" /></Field>
-              <Field label="Perfil"><select value={draft.role || 'user'} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, role: event.target.value } }))} disabled={isSelf}><option value="user">Usuário</option><option value="admin">Administrador</option></select></Field>
-              <Field label="Liberado"><select value={draft.approved ? 'true' : 'false'} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, approved: event.target.value === 'true' } }))} disabled={isSelf}><option value="false">Não</option><option value="true">Sim</option></select></Field>
-              <Field label="Ativo"><select value={draft.active ? 'true' : 'false'} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, active: event.target.value === 'true' } }))} disabled={isSelf}><option value="true">Sim</option><option value="false">Não</option></select></Field>
-            </div>
-            <div className="actions-row" style={{ marginTop: '12px' }}>
-              <button className="primary-button" type="button" onClick={() => onUpdate(user.id, draft)}>Salvar alterações</button>
-              {isSelf ? <span className="subtle">Seu próprio perfil permanece como administrador.</span> : null}
-            </div>
-          </div>;
-        })}
+      <div className="users-toolbar">
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nome ou usuário..." />
+        <div className="users-filter-group">
+          {[
+            ['all', 'Todos'],
+            ['active', 'Liberados'],
+            ['pending', 'Pendentes'],
+            ['blocked', 'Bloqueados'],
+            ['admins', 'Admins'],
+          ].map(([value, label]) => <button key={value} type="button" className={filter === value ? 'primary-button' : 'ghost-button'} onClick={() => setFilter(value)}>{label}</button>)}
+        </div>
+      </div>
+
+      {!filteredUsers.length ? <EmptyState text="Nenhum usuário encontrado para esse filtro." /> : <div className="table-wrap users-table-wrap">
+        <table className="users-table">
+          <thead>
+            <tr>
+              <th>Usuário</th>
+              <th>Perfil</th>
+              <th>Liberado</th>
+              <th>Ativo</th>
+              <th>Atualizado</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredUsers.map((user) => {
+              const draft = drafts[user.id] || { ...user, password: '' };
+              const isEditing = editingId === user.id;
+              const isSelf = currentUser?.id === user.id;
+
+              return <React.Fragment key={user.id}>
+                <tr>
+                  <td>
+                    <div className="users-identity">
+                      <strong>{user.name || user.username}</strong>
+                      <span>{user.username}</span>
+                    </div>
+                  </td>
+                  <td><Badge tone={user.role === 'admin' ? 'info' : 'neutral'}>{user.role === 'admin' ? 'Administrador' : 'Usuário'}</Badge></td>
+                  <td><Badge tone={user.approved ? 'success' : 'warn'}>{user.approved ? 'Liberado' : 'Pendente'}</Badge></td>
+                  <td><Badge tone={user.active ? 'success' : 'danger'}>{user.active ? 'Ativo' : 'Bloqueado'}</Badge></td>
+                  <td><span className="sub-note">{formatDateTime(user.updatedAt || user.createdAt)}</span></td>
+                  <td>
+                    <div className="table-actions">
+                      {!isEditing ? <button className="ghost-button" type="button" onClick={() => openEdit(user)}>Editar</button> : null}
+                      {!isEditing ? <button className="ghost-button" type="button" onClick={() => setPasswordModal({ user, password: '' })}>Redefinir senha</button> : null}
+                      {isEditing ? <button className="primary-button" type="button" onClick={() => saveEdit(user)}>Salvar</button> : null}
+                      {isEditing ? <button className="ghost-button" type="button" onClick={() => cancelEdit(user)}>Cancelar</button> : null}
+                    </div>
+                  </td>
+                </tr>
+                {isEditing ? <tr className="users-edit-row">
+                  <td colSpan="6">
+                    <div className="users-inline-editor">
+                      <div className="form-grid users-inline-grid">
+                        <Field label="Nome"><input value={draft.name || ''} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, name: event.target.value } }))} /></Field>
+                        <Field label="Usuário"><input value={draft.username || ''} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, username: event.target.value } }))} /></Field>
+                        <Field label="Perfil"><select value={draft.role || 'user'} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, role: event.target.value } }))} disabled={isSelf}><option value="user">Usuário</option><option value="admin">Administrador</option></select></Field>
+                        <Field label="Liberado"><select value={draft.approved ? 'true' : 'false'} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, approved: event.target.value === 'true' } }))} disabled={isSelf}><option value="false">Não</option><option value="true">Sim</option></select></Field>
+                        <Field label="Ativo"><select value={draft.active ? 'true' : 'false'} onChange={(event) => setDrafts((current) => ({ ...current, [user.id]: { ...draft, active: event.target.value === 'true' } }))} disabled={isSelf}><option value="true">Sim</option><option value="false">Não</option></select></Field>
+                      </div>
+                      {isSelf ? <p className="subtle">Seu próprio perfil continua protegido como administrador.</p> : null}
+                    </div>
+                  </td>
+                </tr> : null}
+              </React.Fragment>;
+            })}
+          </tbody>
+        </table>
       </div>}
     </section>
+
+    {createOpen ? <div className="modal-overlay" onClick={() => setCreateOpen(false)}>
+      <div className="modal-content users-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="panel-head">
+          <div>
+            <h3>Novo usuário</h3>
+            <p>Cadastre um acesso novo sem poluir a tela principal.</p>
+          </div>
+          <button className="ghost-button" type="button" onClick={() => setCreateOpen(false)}>Fechar</button>
+        </div>
+        <form className="form-grid users-create-grid" onSubmit={submitCreate}>
+          <Field label="Nome"><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Nome do colaborador" /></Field>
+          <Field label="Usuário"><input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="login" /></Field>
+          <Field label="Senha inicial"><input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="mínimo 6 caracteres" /></Field>
+          <Field label="Perfil"><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="user">Usuário</option><option value="admin">Administrador</option></select></Field>
+          <Field label="Liberado"><select value={form.approved ? 'true' : 'false'} onChange={(event) => setForm({ ...form, approved: event.target.value === 'true' })}><option value="false">Não</option><option value="true">Sim</option></select></Field>
+          <Field label="Ativo"><select value={form.active ? 'true' : 'false'} onChange={(event) => setForm({ ...form, active: event.target.value === 'true' })}><option value="true">Sim</option><option value="false">Não</option></select></Field>
+          <div className="actions-row">
+            <button className="primary-button" type="submit" disabled={!form.username.trim() || !form.password.trim()}>Cadastrar usuário</button>
+            <button className="ghost-button" type="button" onClick={() => setCreateOpen(false)}>Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div> : null}
+
+    {passwordModal ? <div className="modal-overlay" onClick={() => setPasswordModal(null)}>
+      <div className="modal-content users-modal users-password-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="panel-head">
+          <div>
+            <h3>Redefinir senha</h3>
+            <p>{passwordModal.user.name || passwordModal.user.username}</p>
+          </div>
+          <button className="ghost-button" type="button" onClick={() => setPasswordModal(null)}>Fechar</button>
+        </div>
+        <form className="stack" onSubmit={submitPasswordReset}>
+          <Field label="Nova senha"><input type="password" value={passwordModal.password} onChange={(event) => setPasswordModal((current) => ({ ...current, password: event.target.value }))} placeholder="mínimo 6 caracteres" /></Field>
+          <div className="actions-row">
+            <button className="primary-button" type="submit" disabled={!passwordModal.password.trim()}>Salvar nova senha</button>
+            <button className="ghost-button" type="button" onClick={() => setPasswordModal(null)}>Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div> : null}
   </>;
 }
 function SettingsPanel({ state, nextPurchaseDate, onSaveCycle, onSaveSettings, onUpdateConsumption }) { const [cycle, setCycle] = useState(state.cycle); const [settings, setSettings] = useState(state.settings); useEffect(() => { setCycle(state.cycle); setSettings(state.settings); }, [state.cycle, state.settings]); return <><section className="panel"><div className="panel-head"><div><h3>Configuração do ciclo</h3><p>Última compra geral e intervalo fixo</p></div><Badge tone="info">Próxima: {formatDate(safeIsoDate(nextPurchaseDate))}</Badge></div><form className="form-grid" onSubmit={(event) => { event.preventDefault(); onSaveCycle({ lastPurchaseDate: cycle.lastPurchaseDate, intervalDays: Number(cycle.intervalDays) }); }}><Field label="Última compra geral"><input type="date" value={cycle.lastPurchaseDate} onChange={(event) => setCycle({ ...cycle, lastPurchaseDate: event.target.value })} /></Field><Field label="Ciclo em dias"><input type="number" min="1" value={cycle.intervalDays} onChange={(event) => setCycle({ ...cycle, intervalDays: event.target.value })} /></Field><div className="actions-row"><button className="primary-button" type="submit">Salvar ciclo</button></div></form></section><section className="panel"><div className="panel-head"><div><h3>Consumo semanal por item</h3><p>Ajuste fino das estimativas de duração</p></div></div><div className="table-wrap"><table><thead><tr><th>Item</th><th>Unidade</th><th>Consumo semanal</th><th>Estoque atual</th></tr></thead><tbody>{state.items.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.unit}</td><td><input type="number" min="0" step="any" value={item.weeklyConsumption} onChange={(event) => onUpdateConsumption(item.id, Number(event.target.value))} /></td><td>{item.quantity} {item.unit}</td></tr>)}</tbody></table></div></section></>; }
