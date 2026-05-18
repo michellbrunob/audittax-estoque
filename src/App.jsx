@@ -1425,18 +1425,22 @@ function App() {
     if (readerFileRef.current) fd.append('primaryFile', readerFileRef.current);
     if (readerAttachmentRef.current) fd.append('attachmentFile', readerAttachmentRef.current);
 
-    const API_BASE = window.__api
-      ? (window.__api.receiptFileUrl(0).replace(/\/api\/receipts\/0\/file$/, ''))
-      : 'http://127.0.0.1:3333';
+    const importUrl = `${NFCE_API_BASE_URL || ''}/api/import-receipt`;
     try {
-      const response = await fetch(`${API_BASE}/api/import-receipt`, {
+      const response = await fetch(importUrl, {
         method: 'POST',
         headers: window.__api?.getAuthToken?.() ? { Authorization: `Bearer ${window.__api.getAuthToken()}` } : {},
         body: fd
       });
-      const result = await response.json().catch(() => ({}));
+      const rawResponse = await response.text();
+      let result = {};
+      try {
+        result = rawResponse ? JSON.parse(rawResponse) : {};
+      } catch {
+        result = { error: rawResponse || '' };
+      }
       if (!response.ok) {
-        throw new Error(result?.error || 'Erro ao importar.');
+        throw new Error(result?.error || `Erro ao importar (${response.status}).`);
       }
       if (result.state) setState(hydrateState(result.state));
       if (currentUser?.role === 'admin') loadUsers().catch(() => {});
