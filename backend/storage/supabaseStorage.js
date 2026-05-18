@@ -25,6 +25,9 @@ const supabase = storageEnabled
 
 function ensureStorageEnabled() {
   if (!storageEnabled) {
+    if (process.env.VERCEL === '1') {
+      throw new Error('Na Vercel, configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY nas variaveis de ambiente do projeto para importar XML/PDF e salvar comprovantes.');
+    }
     throw new Error('Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY para usar comprovantes no Supabase Storage.');
   }
 }
