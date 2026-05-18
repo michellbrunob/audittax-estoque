@@ -1,7 +1,7 @@
-require('dotenv').config();
-
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
 const { createClient } = require('@supabase/supabase-js');
 
 const STORAGE_DIR = __dirname;
