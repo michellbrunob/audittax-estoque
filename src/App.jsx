@@ -1384,7 +1384,7 @@ function App() {
   };
 
 
-  const confirmReaderImport = () => {
+  const confirmReaderImport = async () => {
     if (!reader.draftItems?.length) return;
     const market = state.suppliers.find((s) => s.id === Number(reader.supplierId || 0))?.name || reader.parsed?.mercado || 'Mercado nao identificado';
     const date = reader.parsed?.data || todayString();
@@ -1428,22 +1428,25 @@ function App() {
     const API_BASE = window.__api
       ? (window.__api.receiptFileUrl(0).replace(/\/api\/receipts\/0\/file$/, ''))
       : 'http://127.0.0.1:3333';
-    fetch(`${API_BASE}/api/import-receipt`, {
-      method: 'POST',
-      headers: window.__api?.getAuthToken?.() ? { Authorization: `Bearer ${window.__api.getAuthToken()}` } : {},
-      body: fd
-    })
-      .then((r) => r.json())
-      .then((result) => {
-        if (result.state) setState(hydrateState(result.state));
-        if (currentUser?.role === 'admin') loadUsers().catch(() => {});
-        showFlash('Itens importados do comprovante.');
-      })
-      .catch((e) => showFlash(e?.message || 'Erro ao importar.', 'error'));
-
-    setReader(createEmptyReaderState());
-    readerFileRef.current = null;
-    readerAttachmentRef.current = null;
+    try {
+      const response = await fetch(`${API_BASE}/api/import-receipt`, {
+        method: 'POST',
+        headers: window.__api?.getAuthToken?.() ? { Authorization: `Bearer ${window.__api.getAuthToken()}` } : {},
+        body: fd
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result?.error || 'Erro ao importar.');
+      }
+      if (result.state) setState(hydrateState(result.state));
+      if (currentUser?.role === 'admin') loadUsers().catch(() => {});
+      showFlash('Itens importados do comprovante.');
+      setReader(createEmptyReaderState());
+      readerFileRef.current = null;
+      readerAttachmentRef.current = null;
+    } catch (e) {
+      showFlash(e?.message || 'Erro ao importar.', 'error');
+    }
   };
 
   const cycleProgress = Math.max(0, Math.min(100, (diffDays(new Date(), new Date(`${state.cycle.lastPurchaseDate}T00:00:00`)) / Number(state.cycle.intervalDays || 1)) * 100));

@@ -89,10 +89,11 @@ const api = {
   updateCycle: (p) => json('PUT', '/api/cycle', p),
   saveSettings: (p) => json('PUT', '/api/settings', p),
 
-  importReceipt: (data, file) => {
+  importReceipt: (data, primaryFile, attachmentFile) => {
     const fd = new FormData();
     fd.append('data', JSON.stringify(data));
-    if (file) fd.append('file', file);
+    if (primaryFile) fd.append('primaryFile', primaryFile);
+    if (attachmentFile) fd.append('attachmentFile', attachmentFile);
     return fetch(`${API_BASE}/api/import-receipt`, { method: 'POST', body: fd }).then((r) => r.json());
   },
 
