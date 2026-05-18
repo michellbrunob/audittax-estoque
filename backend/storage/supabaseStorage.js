@@ -1,7 +1,7 @@
-require('dotenv').config();
-
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
 const { createClient } = require('@supabase/supabase-js');
 
 const STORAGE_DIR = __dirname;
@@ -25,6 +25,9 @@ const supabase = storageEnabled
 
 function ensureStorageEnabled() {
   if (!storageEnabled) {
+    if (process.env.VERCEL === '1') {
+      throw new Error('Na Vercel, configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY nas variaveis de ambiente do projeto para importar XML/PDF e salvar comprovantes.');
+    }
     throw new Error('Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY para usar comprovantes no Supabase Storage.');
   }
 }

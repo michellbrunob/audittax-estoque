@@ -1,7 +1,7 @@
-require('dotenv').config();
-
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
 const { Pool } = require('pg');
 const { RECEIPTS_DIR } = require('../storage/supabaseStorage.js');
 const { hashPassword, normalizeUsername } = require('../auth.js');
