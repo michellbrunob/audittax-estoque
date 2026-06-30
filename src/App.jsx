@@ -1149,18 +1149,6 @@ function App() {
       cancelled = true;
     };
   }, []);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  useEffect(() => {
-    localStorage.setItem('audittax-purchase-list-draft', JSON.stringify(purchaseListDraft));
-  }, [purchaseListDraft]);
-  useEffect(() => {
-    setPurchaseListDraft((current) => {
-      const vulIds = new Set(vulnerableItems.map((i) => i.id));
-      const next = mergePurchaseListDraft(state.items, current, vulIds);
-      return samePurchaseListDraft(current, next) ? current : next;
-    });
-  }, [state.items, vulnerableItems]);
-
   const itemsById = useMemo(() => Object.fromEntries(state.items.map((item) => [item.id, item])), [state.items]);
 
   const suppliersById = useMemo(() => Object.fromEntries(state.suppliers.map((supplier) => [supplier.id, supplier])), [state.suppliers]);
@@ -1189,6 +1177,18 @@ function App() {
     const next = new Date(last.getTime() + Number(a.intervalDays||180) * 86400000);
     return next <= new Date();
   }).length;
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => {
+    localStorage.setItem('audittax-purchase-list-draft', JSON.stringify(purchaseListDraft));
+  }, [purchaseListDraft]);
+  useEffect(() => {
+    setPurchaseListDraft((current) => {
+      const vulIds = new Set(vulnerableItems.map((i) => i.id));
+      const next = mergePurchaseListDraft(state.items, current, vulIds);
+      return samePurchaseListDraft(current, next) ? current : next;
+    });
+  }, [state.items, vulnerableItems]);
 
   const showFlash = (message, tone = 'success') => { setFlash({ message, tone }); clearTimeout(timer.current); timer.current = setTimeout(() => setFlash(null), 3200); };
 
