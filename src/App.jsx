@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createWorker } from 'tesseract.js';
 import QrScanner from 'qr-scanner';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -134,12 +134,12 @@ const getUnitOptionsMarkup = () => UNIT_OPTIONS.map((unit) => <option key={unit.
 
 const initialState = {
   items: [
-    { id: 1, name: 'Detergente', unit: 'L', quantity: 3, minStock: 2, weeklyConsumption: 1 },
-    { id: 2, name: 'Agua sanitaria', unit: 'L', quantity: 1, minStock: 3, weeklyConsumption: 0.5 },
-    { id: 3, name: 'Sabao em po', unit: 'kg', quantity: 5, minStock: 2, weeklyConsumption: 0.3 },
-    { id: 4, name: 'Desinfetante', unit: 'L', quantity: 4, minStock: 2, weeklyConsumption: 0.5 },
-    { id: 5, name: 'Papel toalha', unit: 'pct', quantity: 2, minStock: 4, weeklyConsumption: 1 },
-    { id: 6, name: 'Esponja', unit: 'un', quantity: 6, minStock: 3, weeklyConsumption: 0.5 }
+    { id: 1, name: 'Detergente', unit: 'L', quantity: 3, minStock: 2, weeklyConsumption: 1, brand: '', itemNotes: '', packUnit: '', packSize: 1, needsPurchase: false },
+    { id: 2, name: 'Agua sanitaria', unit: 'L', quantity: 1, minStock: 3, weeklyConsumption: 0.5, brand: '', itemNotes: '', packUnit: '', packSize: 1, needsPurchase: false },
+    { id: 3, name: 'Sabao em po', unit: 'kg', quantity: 5, minStock: 2, weeklyConsumption: 0.3, brand: '', itemNotes: '', packUnit: '', packSize: 1, needsPurchase: false },
+    { id: 4, name: 'Desinfetante', unit: 'L', quantity: 4, minStock: 2, weeklyConsumption: 0.5, brand: '', itemNotes: '', packUnit: '', packSize: 1, needsPurchase: false },
+    { id: 5, name: 'Papel toalha', unit: 'pct', quantity: 2, minStock: 4, weeklyConsumption: 1, brand: '', itemNotes: '', packUnit: '', packSize: 1, needsPurchase: false },
+    { id: 6, name: 'Esponja', unit: 'un', quantity: 6, minStock: 3, weeklyConsumption: 0.5, brand: '', itemNotes: '', packUnit: '', packSize: 1, needsPurchase: false }
   ],
   movements: [
     { id: 1, type: 'entrada', itemId: 1, quantity: 5, date: '2026-03-10', notes: 'Compra mensal' },
@@ -164,9 +164,10 @@ const initialState = {
   suppliers: [
     { id: 1, name: 'Atacadao', tradeName: 'Atacadao', type: 'atacado', city: 'Sao Paulo', state: 'SP', cnpj: '', notes: '', active: true },
     { id: 2, name: 'Assai', tradeName: 'Assai', type: 'atacado', city: 'Sao Paulo', state: 'SP', cnpj: '', notes: '', active: true },
-    { id: 3, name: 'Carrefour', tradeName: 'Carrefour', type: 'mercado', city: 'Sao Paulo', state: 'SP', cnpj: '', notes: '', active: true }
+    { id: 3, name: 'Carrefour', tradeName: 'Carrefour', type: 'supermercado', city: 'Sao Paulo', state: 'SP', cnpj: '', notes: '', active: true },
+    { id: 4, name: 'Mercadinho Central', tradeName: 'Mercadinho Central', type: 'mercado', city: 'Sao Paulo', state: 'SP', cnpj: '', notes: '', active: true }
   ],
-  cycle: { lastPurchaseDate: '2026-03-06', intervalDays: 60 },
+  cycle: { lastPurchaseDate: '2026-03-01', intervalDays: 30 },
   settings: { receiptPassword: '1234', anthropicApiKey: '' },
   counters: { item: 7, movement: 5, price: 5, extraPurchase: 3, receipt: 3, supplier: 4 },
   maintenanceAssets: [],
@@ -179,7 +180,14 @@ const hydrateState = (raw) => {
   return {
     ...initialState,
     ...raw,
-    items: Array.isArray(raw.items) ? raw.items : initialState.items,
+    items: Array.isArray(raw.items) ? raw.items.map(item => ({
+      brand: '',
+      itemNotes: '',
+      packUnit: '',
+      packSize: 1,
+      needsPurchase: false,
+      ...item
+    })) : initialState.items,
     movements: Array.isArray(raw.movements) ? raw.movements : initialState.movements,
     priceHistory: Array.isArray(raw.priceHistory) ? raw.priceHistory : initialState.priceHistory,
     extraPurchases: Array.isArray(raw.extraPurchases) ? raw.extraPurchases : initialState.extraPurchases,
@@ -386,13 +394,15 @@ const consolidateDraftItems = (entries, catalogItems = []) => {
   }));
 };
 
-const mergePurchaseListDraft = (items, draft = []) => {
+const mergePurchaseListDraft = (items, draft = [], vulIds = null) => {
   const draftById = new Map((draft || []).map((entry) => [Number(entry.id), entry]));
   return sortByName(items).map((item) => {
     const saved = draftById.get(Number(item.id));
+    const needsBuy = item.needsPurchase || (vulIds && vulIds.has(item.id));
+    const defaultIncluded = needsBuy ? true : (saved?.included ?? true);
     return {
       id: item.id,
-      included: saved?.included ?? true,
+      included: saved !== undefined ? saved.included : defaultIncluded,
       editQty: saved?.editQty ?? ''
     };
   });
@@ -1056,7 +1066,13 @@ function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [screen, setScreen] = useState('dashboard');
-  const [purchaseListDraft, setPurchaseListDraft] = useState(() => mergePurchaseListDraft(initialState.items));
+  const [purchaseListDraft, setPurchaseListDraft] = useState(() => {
+    const stored = localStorage.getItem('audittax-purchase-list-draft');
+    if (stored) {
+      try { return JSON.parse(stored); } catch (e) {}
+    }
+    return mergePurchaseListDraft(initialState.items);
+  });
   const [flash, setFlash] = useState(null);
   const [alertsLastSeen, setAlertsLastSeen] = useState(0);
   const [historyFilter, setHistoryFilter] = useState('');
@@ -1135,11 +1151,15 @@ function App() {
   }, []);
   useEffect(() => () => clearTimeout(timer.current), []);
   useEffect(() => {
+    localStorage.setItem('audittax-purchase-list-draft', JSON.stringify(purchaseListDraft));
+  }, [purchaseListDraft]);
+  useEffect(() => {
     setPurchaseListDraft((current) => {
-      const next = mergePurchaseListDraft(state.items, current);
+      const vulIds = new Set(vulnerableItems.map((i) => i.id));
+      const next = mergePurchaseListDraft(state.items, current, vulIds);
       return samePurchaseListDraft(current, next) ? current : next;
     });
-  }, [state.items]);
+  }, [state.items, vulnerableItems]);
 
   const itemsById = useMemo(() => Object.fromEntries(state.items.map((item) => [item.id, item])), [state.items]);
 
@@ -1158,9 +1178,9 @@ function App() {
     if (!weekly) return Number.POSITIVE_INFINITY;
     return Math.max(0, Math.ceil((quantity / weekly) * 7));
   };
-  const lowStockItems = useMemo(() => state.items.filter((item) => Number(item.quantity || 0) <= Number(item.minStock || 0)), [state.items]);
+  const lowStockItems = useMemo(() => state.items.filter((item) => Number(item.quantity || 0) <= Number(item.minStock || 0) || item.needsPurchase), [state.items]);
   const vulnerableItems = useMemo(() => state.items.filter((item) => {
-    const belowMin = Number(item.quantity || 0) <= Number(item.minStock || 0);
+    const belowMin = Number(item.quantity || 0) <= Number(item.minStock || 0) || item.needsPurchase;
     return belowMin || durationForItem(item) < daysUntilNextPurchase;
   }), [state.items, daysUntilNextPurchase]);
   const maintOverdue = (state.maintenanceAssets || []).filter((a) => {
@@ -1533,7 +1553,13 @@ function App() {
       <main className="main">
         <header className="topbar"><div><p className="eyebrow">Audittax Gestão Integrada</p><h2>{visibleScreens.find((screenItem) => screenItem[0] === activeScreen)?.[1]}</h2>{activeScreen === 'dashboard' ? <p className="subtle">{state.items.length} itens cadastrados, próxima compra em {formatDate(safeIsoDate(nextPurchaseDate))}</p> : <p className="subtle">Plataforma integrada para estoque administrativo, limpeza, TI e manutenção predial.</p>}</div>{flash ? <div className={`flash ${flash.tone}`}>{flash.message}</div> : null}</header>
 
-        {activeScreen === 'dashboard' ? <><div className="metrics"><MetricCard label="Itens ativos" value={state.items.length} /><MetricCard label="Abaixo do minimo" value={lowStockItems.length} tone={lowStockItems.length ? 'danger' : 'success'} /><MetricCard label="Nao chegam ate a compra" value={vulnerableItems.length} tone={vulnerableItems.length ? 'warn' : 'success'} /><MetricCard label="Custo extra no ciclo" value={currency(state.extraPurchases.reduce((sum, entry) => sum + entry.cost, 0))} tone="warn" /></div><div className="panel-grid"><section className="panel"><div className="panel-head"><div><h3>Alertas automaticos</h3><p>Compra geral prevista para {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><Badge tone={daysUntilNextPurchase <= 7 ? 'danger' : 'info'}>{daysUntilNextPurchase} dias restantes</Badge></div>{!lowStockItems.length && !vulnerableItems.length ? <EmptyState text="Nenhum alerta no momento." /> : <div className="stack">{lowStockItems.map((item) => <AlertCard key={`low-${item.id}`} tone="danger" title={`${item.name} abaixo do estoque minimo`} text={`Atual ${item.quantity} ${item.unit}. Minimo ${item.minStock} ${item.unit}.`} />)}{vulnerableItems.map((item) => <AlertCard key={`vul-${item.id}`} tone="warn" title={`${item.name} nao chega ate a próxima compra`} text={`Duracao estimada: ${durationForItem(item)} dias.`} />)}</div>}</section><section className="panel"><div className="panel-head"><div><h3>Últimas movimentações</h3><p>Entradas, saidas e reposições avulsas</p></div></div><div className="stack">{[...state.movements].slice(-6).reverse().map((entry) => <div className="history-row" key={entry.id}><span className={`dot ${entry.type}`}></span><div className="history-main"><strong>{entry.type === 'entrada' ? '+' : '-'}{entry.quantity}</strong> {itemsById[entry.itemId]?.name || 'Item removido'} <span className="sub-note">{entry.notes}</span></div><span className="mono">{formatDate(entry.date)}</span></div>)}</div></section></div></> : null}
+        {activeScreen === 'dashboard' ? <><div className="metrics"><MetricCard label="Itens ativos" value={state.items.length} /><MetricCard label="Abaixo do minimo" value={lowStockItems.length} tone={lowStockItems.length ? 'danger' : 'success'} /><MetricCard label="Nao chegam ate a compra" value={vulnerableItems.length} tone={vulnerableItems.length ? 'warn' : 'success'} /><MetricCard label="Custo extra no ciclo" value={currency(state.extraPurchases.reduce((sum, entry) => sum + entry.cost, 0))} tone="warn" /></div><div className="panel-grid"><section className="panel"><div className="panel-head"><div><h3>Alertas automatos</h3><p>Compra geral prevista para {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><Badge tone={daysUntilNextPurchase <= 7 ? 'danger' : 'info'}>{daysUntilNextPurchase} dias restantes</Badge></div>{!lowStockItems.length && !vulnerableItems.length ? <EmptyState text="Nenhum alerta no momento." /> : <div className="stack">{lowStockItems.map((item) => {
+           const isActuallyLow = Number(item.quantity || 0) <= Number(item.minStock || 0);
+           const tone = isActuallyLow ? 'danger' : 'warn';
+           const title = isActuallyLow ? `${item.name} abaixo do estoque mínimo` : `${item.name} sinalizado para compra`;
+           const text = isActuallyLow ? `Atual ${item.quantity} ${item.unit}. Mínimo ${item.minStock} ${item.unit}.` : `Sinalizado manualmente. Atual ${item.quantity} ${item.unit}.`;
+           return <AlertCard key={`low-${item.id}`} tone={tone} title={title} text={text} />;
+         })}{vulnerableItems.filter(item => !item.needsPurchase).map((item) => <AlertCard key={`vul-${item.id}`} tone="warn" title={`${item.name} nao chega ate a próxima compra`} text={`Duracao estimada: ${durationForItem(item)} dias.`} />)}</div>}</section><section className="panel"><div className="panel-head"><div><h3>Últimas movimentações</h3><p>Entradas, saidas e reposições avulsas</p></div></div><div className="stack">{[...state.movements].slice(-6).reverse().map((entry) => <div className="history-row" key={entry.id}><span className={`dot ${entry.type}`}></span><div className="history-main"><strong>{entry.type === 'entrada' ? '+' : '-'}{entry.quantity}</strong> {itemsById[entry.itemId]?.name || 'Item removido'} <span className="sub-note">{entry.notes}</span></div><span className="mono">{formatDate(entry.date)}</span></div>)}</div></section></div></> : null}
 
         {screen === 'cycle' ? <><section className={`panel cycle-banner ${daysUntilNextPurchase <= 7 ? 'danger' : daysUntilNextPurchase <= 20 ? 'warn' : 'success'}`}><div><p className="eyebrow">Próxima compra geral</p><h3>{daysUntilNextPurchase} dias</h3><p>Data prevista: {formatDate(safeIsoDate(nextPurchaseDate))}</p></div><div className="cycle-meter"><div className="progress"><span style={{ width: `${cycleProgress}%` }}></span></div><p>Custo extra no ciclo atual: {currency(state.extraPurchases.filter((entry) => new Date(`${entry.date}T00:00:00`) >= new Date(`${state.cycle.lastPurchaseDate}T00:00:00`)).reduce((sum, entry) => sum + entry.cost, 0))}</p></div></section><section className="panel"><div className="panel-head"><div><h3>Itens vs próxima compra</h3><p>Quais itens aguentam ate o fechamento do ciclo</p></div></div><div className="table-wrap"><table><thead><tr><th>Item</th><th>Estoque</th><th>Esgota em</th><th>Dias restantes</th><th>Situacao</th></tr></thead><tbody>{state.items.map((item) => { const days = durationForItem(item); return <tr key={item.id}><td>{item.name}</td><td>{item.quantity} {item.unit}</td><td>{Number.isFinite(days) ? `${days} dias` : 'Sem consumo'}</td><td>{daysUntilNextPurchase}</td><td><Badge tone={days >= daysUntilNextPurchase ? 'success' : 'warn'}>{days >= daysUntilNextPurchase ? 'Aguenta o ciclo' : 'Precisa repor'}</Badge></td></tr>; })}</tbody></table></div></section></> : null}
 
@@ -1655,7 +1681,7 @@ function ConfirmModal({ title, message, onConfirm, onCancel, confirmLabel = 'Con
 }
 
 function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete }) {
-  const emptyForm = { name: '', unit: 'un', quantity: 0, minStock: 1, weeklyConsumption: 0, packUnit: '', packSize: 1, brand: '', itemNotes: '' };
+  const emptyForm = { name: '', unit: 'un', quantity: 0, minStock: 1, weeklyConsumption: 0, packUnit: '', packSize: 1, brand: '', itemNotes: '', needsPurchase: false };
   const [addForm, setAddForm] = useState(emptyForm);
   const [editItem, setEditItem] = useState(null);
   const [pendingEditPayload, setPendingEditPayload] = useState(null);
@@ -1664,13 +1690,13 @@ function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete 
   const handleAdd = (event) => {
     event.preventDefault();
     if (!addForm.name.trim()) return;
-    onAdd({ name: addForm.name.trim(), unit: addForm.unit, quantity: Number(addForm.quantity || 0), minStock: Number(addForm.minStock || 1), weeklyConsumption: Number(addForm.weeklyConsumption || 0), packUnit: addForm.packUnit || '', packSize: Number(addForm.packSize || 1), brand: addForm.brand.trim(), itemNotes: addForm.itemNotes.trim() });
+    onAdd({ name: addForm.name.trim(), unit: addForm.unit, quantity: Number(addForm.quantity || 0), minStock: Number(addForm.minStock || 1), weeklyConsumption: Number(addForm.weeklyConsumption || 0), packUnit: addForm.packUnit || '', packSize: Number(addForm.packSize || 1), brand: addForm.brand.trim(), itemNotes: addForm.itemNotes.trim(), needsPurchase: addForm.needsPurchase || false });
     setAddForm(emptyForm);
   };
   const handleEditSave = (event) => {
     event.preventDefault();
     if (!editItem?.name?.trim()) return;
-    setPendingEditPayload({ id: editItem.id, name: editItem.name.trim(), unit: editItem.unit, quantity: Number(editItem.quantity || 0), minStock: Number(editItem.minStock || 1), weeklyConsumption: Number(editItem.weeklyConsumption || 0), packUnit: editItem.packUnit || '', packSize: Number(editItem.packSize || 1), brand: (editItem.brand || '').trim(), itemNotes: (editItem.itemNotes || '').trim() });
+    setPendingEditPayload({ id: editItem.id, name: editItem.name.trim(), unit: editItem.unit, quantity: Number(editItem.quantity || 0), minStock: Number(editItem.minStock || 1), weeklyConsumption: Number(editItem.weeklyConsumption || 0), packUnit: editItem.packUnit || '', packSize: Number(editItem.packSize || 1), brand: (editItem.brand || '').trim(), itemNotes: (editItem.itemNotes || '').trim(), needsPurchase: editItem.needsPurchase || false });
   };
   const confirmEdit = () => {
     onUpdate(pendingEditPayload.id, pendingEditPayload);
@@ -1689,6 +1715,10 @@ function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete 
       {addForm.packUnit && Number(addForm.packSize) > 0 ? <div className="pack-preview">1 {addForm.packUnit} = {addForm.packSize} {UNIT_MAP[addForm.unit]?.label?.split(' ')[0] || addForm.unit}</div> : null}
       <Field label="Marca preferida"><input value={addForm.brand} onChange={(e) => setAddForm({ ...addForm, brand: e.target.value })} placeholder="Ex: Ype, Neve, Brilhante..." /></Field>
       <Field label="Observações do item"><input value={addForm.itemNotes} onChange={(e) => setAddForm({ ...addForm, itemNotes: e.target.value })} placeholder="Ex: Comprar so na promocao, verificar validade..." /></Field>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', gridColumn: 'span 2', margin: '8px 0' }}>
+        <input type="checkbox" id="add-needsPurchase" checked={addForm.needsPurchase || false} onChange={(e) => setAddForm({ ...addForm, needsPurchase: e.target.checked })} style={{ width: 'auto', margin: 0, cursor: 'pointer' }} />
+        <label htmlFor="add-needsPurchase" style={{ fontWeight: 500, cursor: 'pointer', userSelect: 'none' }}>Comprar no mês (Forçar na lista de compras)</label>
+      </div>
       <div className="actions-row"><button className="primary-button" type="submit">Cadastrar item</button></div>
     </form></section>
     <section className="panel"><div className="panel-head"><div><h3>Itens cadastrados</h3><p>Lista completa do estoque monitorado</p></div><Badge tone="info">{items.length} item(ns)</Badge></div>
@@ -1697,7 +1727,14 @@ function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete 
       const packSz = Number(item.packSize || 1);
       const packLbl = item.packUnit && packSz > 1 ? `${item.packUnit} c/ ${packSz}` : '-';
   const qtyInPacks = item.packUnit && packSz > 1 ? ` (aprox. ${(Number(item.quantity || 0) / packSz).toFixed(1)} ${item.packUnit})` : '';
-      return <tr key={item.id}><td><strong>{item.name}</strong>{item.brand ? <div className="sub-note">{item.brand}</div> : null}{item.itemNotes ? <div className="sub-note" style={{ fontStyle: 'italic' }}>{item.itemNotes}</div> : null}</td><td>{item.unit}</td><td>{item.quantity}{qtyInPacks ? <div className="sub-note">{qtyInPacks}</div> : null}</td><td>{packLbl}</td><td>{item.minStock}</td><td>{item.weeklyConsumption || '-'}</td><td><div className="table-actions"><button className="ghost-button" type="button" onClick={() => setEditItem({ id: item.id, name: item.name, unit: item.unit, quantity: item.quantity, minStock: item.minStock, weeklyConsumption: item.weeklyConsumption || 0, packUnit: item.packUnit || '', packSize: Number(item.packSize || 1), brand: item.brand || '', itemNotes: item.itemNotes || '' })}>Editar</button><button className="table-action" type="button" onClick={() => setConfirmDeleteItem(item)}>Excluir</button></div></td></tr>;
+      return <tr key={item.id}><td>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <strong>{item.name}</strong>
+          {item.needsPurchase ? <span className="badge warn" style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px' }}>Comprar no mês</span> : null}
+        </div>
+        {item.brand ? <div className="sub-note">{item.brand}</div> : null}
+        {item.itemNotes ? <div className="sub-note" style={{ fontStyle: 'italic' }}>{item.itemNotes}</div> : null}
+      </td><td>{item.unit}</td><td>{item.quantity}{qtyInPacks ? <div className="sub-note">{qtyInPacks}</div> : null}</td><td>{packLbl}</td><td>{item.minStock}</td><td>{item.weeklyConsumption || '-'}</td><td><div className="table-actions"><button className="ghost-button" type="button" onClick={() => setEditItem({ id: item.id, name: item.name, unit: item.unit, quantity: item.quantity, minStock: item.minStock, weeklyConsumption: item.weeklyConsumption || 0, packUnit: item.packUnit || '', packSize: Number(item.packSize || 1), brand: item.brand || '', itemNotes: item.itemNotes || '', needsPurchase: item.needsPurchase || false })}>Editar</button><button className="table-action" type="button" onClick={() => setConfirmDeleteItem(item)}>Excluir</button></div></td></tr>;
     })}</tbody></table></div></section>
     {editItem ? <div className="modal-overlay"><div className="modal-content">
       <div className="panel-head"><div><h3>Editar item</h3><p>Altere os dados e salve ou cancele.</p></div></div>
@@ -1712,6 +1749,10 @@ function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete 
         {editItem.packUnit && Number(editItem.packSize) > 0 ? <div className="pack-preview">1 {editItem.packUnit} = {editItem.packSize} {UNIT_MAP[editItem.unit]?.label?.split(' ')[0] || editItem.unit} &bull; Estoque: {Number(editItem.quantity || 0)} {editItem.unit} &asymp; {(Number(editItem.quantity || 0) / Number(editItem.packSize || 1)).toFixed(1)} {editItem.packUnit}(s)</div> : null}
         <Field label="Marca preferida"><input value={editItem.brand || ''} onChange={(e) => setEditItem({ ...editItem, brand: e.target.value })} placeholder="Ex: Ype, Neve..." /></Field>
         <Field label="Observações do item"><input value={editItem.itemNotes || ''} onChange={(e) => setEditItem({ ...editItem, itemNotes: e.target.value })} placeholder="Ex: Verificar validade" /></Field>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', gridColumn: 'span 2', margin: '8px 0' }}>
+          <input type="checkbox" id="edit-needsPurchase" checked={editItem.needsPurchase || false} onChange={(e) => setEditItem({ ...editItem, needsPurchase: e.target.checked })} style={{ width: 'auto', margin: 0, cursor: 'pointer' }} />
+          <label htmlFor="edit-needsPurchase" style={{ fontWeight: 500, cursor: 'pointer', userSelect: 'none' }}>Comprar no mês (Forçar na lista de compras)</label>
+        </div>
         <div className="actions-row"><button className="primary-button" type="submit">Salvar alteracoes</button><button className="ghost-button" type="button" onClick={() => setEditItem(null)}>Cancelar</button></div>
       </form>
     </div></div> : null}
@@ -2162,6 +2203,8 @@ function ReceiptsPanel({ receipts, onAdd, onDelete, suppliersById }) {
 </>;
 }
 function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, daysUntilNextPurchase, nextPurchaseDate, cycle, priceMap, suppliersById, purchaseListDraft, onPurchaseListDraftChange }) {
+  const [filterMode, setFilterMode] = useState('needs-purchase');
+
   const editableList = useMemo(() => {
     const draftById = new Map((purchaseListDraft || []).map((entry) => [Number(entry.id), entry]));
     return sortByName(items).map((item) => {
@@ -2201,6 +2244,29 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
   const clearItemQty = (id) => updateItem(id, { editQty: '' });
   const resetToSuggestions = () => onPurchaseListDraftChange(mergePurchaseListDraft(items));
 
+  const autoSuggestQuantities = () => {
+    onPurchaseListDraftChange((prev) => prev.map((entry) => {
+      const item = items.find((i) => i.id === entry.id);
+      if (!item) return entry;
+      const isLow = Number(item.quantity || 0) <= Number(item.minStock || 0);
+      const duration = durationForItem(item);
+      const isVul = Number.isFinite(duration) && duration < daysUntilNextPurchase;
+      const needsBuy = isLow || isVul || item.needsPurchase;
+      if (!needsBuy) return entry;
+      const targetQty = Math.max(Number(item.minStock || 1) * 1.5, Number(item.minStock || 1) + (Number(item.weeklyConsumption || 0) * (Number(cycle?.intervalDays || 30) / 7)));
+      const deficit = Math.max(0, targetQty - Number(item.quantity || 0));
+      const packSz = Number(item.packSize || 1);
+      const usePackMode = item.packUnit && packSz > 1;
+      const suggestedQty = usePackMode ? Math.ceil(deficit / packSz) : Math.ceil(deficit);
+      return {
+        ...entry,
+        included: needsBuy,
+        editQty: suggestedQty > 0 ? String(suggestedQty) : entry.editQty,
+        isPackMode: usePackMode,
+      };
+    }));
+  };
+
   const getActualQty = (item) => {
     const quantity = Number(item.editQty || 0);
     return item.isPackMode ? quantity * item.itemPackSize : quantity;
@@ -2212,6 +2278,19 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
   };
   const selectedItems = editableList.filter((i) => i.included);
   const totalSelected = selectedItems.reduce((sum, i) => sum + getItemCost(i), 0);
+
+  const filteredList = useMemo(() => {
+    if (filterMode === 'selected') return editableList.filter((i) => i.included);
+    if (filterMode === 'needs-purchase') {
+      return editableList.filter((item) => {
+        const isLow = Number(item.quantity || 0) <= Number(item.minStock || 0);
+        const duration = durationForItem(item);
+        const isVul = Number.isFinite(duration) && duration < daysUntilNextPurchase;
+        return isLow || isVul || item.needsPurchase;
+      });
+    }
+    return editableList;
+  }, [editableList, filterMode, durationForItem, daysUntilNextPurchase]);
 
   const printPurchaseList = () => {
     const rows = selectedItems.map((item) => {
@@ -2360,6 +2439,13 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
     URL.revokeObjectURL(url);
   };
 
+  const needsPurchaseCount = editableList.filter((item) => {
+    const isLow = Number(item.quantity || 0) <= Number(item.minStock || 0);
+    const duration = durationForItem(item);
+    const isVul = Number.isFinite(duration) && duration < daysUntilNextPurchase;
+    return isLow || isVul || item.needsPurchase;
+  }).length;
+
   return <>
     <div className="report-print-header">
       <h2>Lista de Compra &mdash; {formatDate(todayString())}</h2>
@@ -2381,9 +2467,10 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
             const duration = durationForItem(item);
             const isLow = Number(item.quantity || 0) <= Number(item.minStock || 0);
             const isVulnerable = !isLow && duration < daysUntilNextPurchase;
-            const tone = isLow ? 'danger' : isVulnerable ? 'warn' : 'success';
-            const label = isLow ? 'Abaixo do minimo' : isVulnerable ? 'Vulneravel' : 'OK';
-            return <tr key={item.id}><td><strong>{item.name}</strong></td><td>{item.unit}</td><td>{item.quantity}</td><td>{item.minStock}</td><td>{item.weeklyConsumption || '-'}</td><td>{Number.isFinite(duration) ? `${duration} dias` : 'Sem consumo'}</td><td><Badge tone={tone}>{label}</Badge></td></tr>;
+            const isForced = !isLow && !isVulnerable && item.needsPurchase;
+            const tone = isLow ? 'danger' : isVulnerable || isForced ? 'warn' : 'success';
+            const label = isLow ? 'Abaixo do minimo' : isVulnerable ? 'Vulneravel' : isForced ? 'Na lista' : 'OK';
+            return <tr key={item.id}><td><strong>{item.name}</strong>{isForced ? <span className="badge warn" style={{ fontSize: '10px', marginLeft: '6px', padding: '2px 5px', borderRadius: '4px' }}>Comprar no mês</span> : null}</td><td>{item.unit}</td><td>{item.quantity}</td><td>{item.minStock}</td><td>{item.weeklyConsumption || '-'}</td><td>{Number.isFinite(duration) ? `${duration} dias` : 'Sem consumo'}</td><td><Badge tone={tone}>{label}</Badge></td></tr>;
           })}</tbody>
         </table>
       </div>
@@ -2393,15 +2480,35 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
       <div className="panel-head no-print">
         <div>
           <h3>Lista de compra</h3>
-          <p>{editableList.length} item(ns) cadastrados na lista{totalSelected > 0 ? ` - estimado ${currency(totalSelected)}` : ""}</p>
+          <p>{selectedItems.length} item(ns) selecionado(s){totalSelected > 0 ? ` - estimado ${currency(totalSelected)}` : ""}</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button className="ghost-button" type="button" onClick={autoSuggestQuantities} title="Preenche automaticamente quantidades sugeridas para itens que precisam de compra">✨ Sugerir quantidades</button>
           <button className="ghost-button" type="button" onClick={resetToSuggestions}>Limpar quantidades</button>
           <button className="primary-button" type="button" onClick={printPurchaseList}>Imprimir lista</button>
         </div>
       </div>
+
+      <div className="no-print" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '0 0 16px' }}>
+        <button
+          type="button"
+          onClick={() => setFilterMode('needs-purchase')}
+          style={{ padding: '6px 14px', borderRadius: '8px', border: '1.5px solid', cursor: 'pointer', fontSize: '13px', fontWeight: 600, transition: 'all .15s', background: filterMode === 'needs-purchase' ? 'var(--accent, #6c47ff)' : '#f4f4f6', color: filterMode === 'needs-purchase' ? '#fff' : 'inherit', borderColor: filterMode === 'needs-purchase' ? 'var(--accent, #6c47ff)' : 'var(--line, #e0e0e0)' }}
+        >Precisam comprar ({needsPurchaseCount})</button>
+        <button
+          type="button"
+          onClick={() => setFilterMode('selected')}
+          style={{ padding: '6px 14px', borderRadius: '8px', border: '1.5px solid', cursor: 'pointer', fontSize: '13px', fontWeight: 600, transition: 'all .15s', background: filterMode === 'selected' ? 'var(--accent, #6c47ff)' : '#f4f4f6', color: filterMode === 'selected' ? '#fff' : 'inherit', borderColor: filterMode === 'selected' ? 'var(--accent, #6c47ff)' : 'var(--line, #e0e0e0)' }}
+        >Selecionados ({selectedItems.length})</button>
+        <button
+          type="button"
+          onClick={() => setFilterMode('all')}
+          style={{ padding: '6px 14px', borderRadius: '8px', border: '1.5px solid', cursor: 'pointer', fontSize: '13px', fontWeight: 600, transition: 'all .15s', background: filterMode === 'all' ? 'var(--accent, #6c47ff)' : '#f4f4f6', color: filterMode === 'all' ? '#fff' : 'inherit', borderColor: filterMode === 'all' ? 'var(--accent, #6c47ff)' : 'var(--line, #e0e0e0)' }}
+        >Todos os itens ({editableList.length})</button>
+      </div>
+
       <div className="report-print-section-title">
-        <h3>Lista de Compra &mdash; {editableList.length} item(ns)</h3>
+        <h3>Lista de Compra &mdash; {selectedItems.length} item(ns)</h3>
         <p>Gerado em {formatDate(todayString())} &bull; Próxima compra: {formatDate(safeIsoDate(nextPurchaseDate))}</p>
       </div>
 
@@ -2433,18 +2540,27 @@ function ReportsPanel({ items, lowStockItems, vulnerableItems, durationForItem, 
         : <div className="table-wrap no-print">
             <table className="purchase-table">
               <thead><tr><th className="col-check no-print"><input type="checkbox" title={editableList.every((i) => i.included) ? 'Desmarcar todos' : 'Selecionar todos'} checked={editableList.length > 0 && editableList.every((i) => i.included)} ref={(el) => { if (el) el.indeterminate = editableList.some((i) => i.included) && !editableList.every((i) => i.included); }} onChange={(e) => onPurchaseListDraftChange((prev) => prev.map((i) => ({ ...i, included: e.target.checked })))} style={{ width: 'auto', cursor: 'pointer', margin: 0 }} /></th><th>Item</th><th>Quantidade</th><th className="no-print">Und.</th><th>Fornecedor</th><th>Custo est.</th><th className="no-print"></th></tr></thead>
-              <tbody>{editableList.map((item) => {
+              <tbody>{filteredList.map((item) => {
                 const actualQty = getActualQty(item);
                 const cost = item.included ? getItemCost(item) : 0;
                 const hasQty = item.editQty !== '' && Number(item.editQty) > 0;
                 const qtyLabel = !hasQty ? '' : item.isPackMode ? `${item.editQty} ${item.itemPackUnit} (${actualQty} ${item.unit})` : `${item.editQty} ${item.unit}`;
+                const isActuallyLow = Number(item.quantity || 0) <= Number(item.minStock || 0);
+                const duration = durationForItem(item);
+                const isVul = Number.isFinite(duration) && duration < daysUntilNextPurchase;
+                const isForced = !isActuallyLow && !isVul && item.needsPurchase;
                 return <tr key={item.id} style={{ opacity: item.included ? 1 : 0.4 }} className={item.included ? '' : 'no-print'}>
                   <td className="col-check">
                     <input className="no-print" type="checkbox" checked={item.included} onChange={(e) => updateItem(item.id, { included: e.target.checked })} style={{ width: 'auto', cursor: 'pointer', margin: 0 }} />
                     <span className="print-only print-checkbox"></span>
                   </td>
                   <td>
-                    <strong>{item.name}</strong>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <strong>{item.name}</strong>
+                      {isActuallyLow && <span className="badge danger" style={{ fontSize: '10px', padding: '2px 5px', borderRadius: '4px' }}>Estoque baixo</span>}
+                      {isVul && !isActuallyLow && <span className="badge warn" style={{ fontSize: '10px', padding: '2px 5px', borderRadius: '4px' }}>Vulnerável</span>}
+                      {isForced && <span className="badge warn" style={{ fontSize: '10px', padding: '2px 5px', borderRadius: '4px' }}>Sinalizado</span>}
+                    </div>
                     {item.brand ? <div className="sub-note">{item.brand}</div> : null}
                     {item.itemNotes ? <div className="sub-note" style={{ fontStyle: 'italic' }}>{item.itemNotes}</div> : null}
                     {item.isManual ? <span className="badge info" style={{ fontSize: '10px', marginTop: '4px', display: 'inline-block' }}>Adicionado</span> : null}
