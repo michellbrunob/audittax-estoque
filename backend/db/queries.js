@@ -17,6 +17,11 @@ const normalizeItem = (row) => row ? ({
   minStock: toNumber(row.minStock),
   weeklyConsumption: toNumber(row.weeklyConsumption),
   createdByReceiptId: row.createdByReceiptId == null ? null : Number(row.createdByReceiptId),
+  brand: row.brand || '',
+  itemNotes: row.itemNotes || '',
+  packUnit: row.packUnit || '',
+  packSize: toNumber(row.packSize, 1),
+  needsPurchase: row.needsPurchase === true || row.needsPurchase === 'true',
 }) : null;
 
 const normalizeMovement = (row) => row ? ({
@@ -125,10 +130,15 @@ async function insertItem(payload, client) {
     toNumber(payload.minStock),
     toNumber(payload.weeklyConsumption),
     payload.createdByReceiptId || null,
+    payload.brand || '',
+    payload.itemNotes || '',
+    payload.packUnit || '',
+    toNumber(payload.packSize, 1),
+    payload.needsPurchase === true || payload.needsPurchase === 'true',
   ];
   const { rows } = await query(`
-    INSERT INTO items (name, unit, quantity, "minStock", "weeklyConsumption", "createdByReceiptId")
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO items (name, unit, quantity, "minStock", "weeklyConsumption", "createdByReceiptId", brand, "itemNotes", "packUnit", "packSize", "needsPurchase")
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     RETURNING *
   `, params, client);
   return normalizeItem(rows[0]);
@@ -141,12 +151,18 @@ async function updateItem(id, payload, client) {
     toNumber(payload.quantity),
     toNumber(payload.minStock),
     toNumber(payload.weeklyConsumption),
+    payload.brand || '',
+    payload.itemNotes || '',
+    payload.packUnit || '',
+    toNumber(payload.packSize, 1),
+    payload.needsPurchase === true || payload.needsPurchase === 'true',
     id,
   ];
   await query(`
     UPDATE items
-    SET name = $1, unit = $2, quantity = $3, "minStock" = $4, "weeklyConsumption" = $5
-    WHERE id = $6
+    SET name = $1, unit = $2, quantity = $3, "minStock" = $4, "weeklyConsumption" = $5,
+        brand = $6, "itemNotes" = $7, "packUnit" = $8, "packSize" = $9, "needsPurchase" = $10
+    WHERE id = $11
   `, params, client);
   return getItem(id, client);
 }

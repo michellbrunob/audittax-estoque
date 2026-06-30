@@ -17,7 +17,12 @@ CREATE TABLE IF NOT EXISTS items (
   quantity NUMERIC DEFAULT 0,
   "minStock" NUMERIC DEFAULT 0,
   "weeklyConsumption" NUMERIC DEFAULT 0,
-  "createdByReceiptId" BIGINT
+  "createdByReceiptId" BIGINT,
+  brand TEXT DEFAULT '',
+  "itemNotes" TEXT DEFAULT '',
+  "packUnit" TEXT DEFAULT '',
+  "packSize" NUMERIC DEFAULT 1,
+  "needsPurchase" BOOLEAN DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS receipts (
@@ -172,3 +177,9 @@ CREATE INDEX IF NOT EXISTS idx_movements_receipt_id ON movements("receiptId");
 CREATE INDEX IF NOT EXISTS idx_price_history_receipt_id ON price_history("receiptId");
 CREATE INDEX IF NOT EXISTS idx_receipt_files_receipt_id ON receipt_files("receiptId");
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+
+ALTER TABLE items ADD COLUMN IF NOT EXISTS brand TEXT DEFAULT '';
+ALTER TABLE items ADD COLUMN IF NOT EXISTS "itemNotes" TEXT DEFAULT '';
+ALTER TABLE items ADD COLUMN IF NOT EXISTS "packUnit" TEXT DEFAULT '';
+ALTER TABLE items ADD COLUMN IF NOT EXISTS "packSize" NUMERIC DEFAULT 1;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS "needsPurchase" BOOLEAN DEFAULT FALSE;
