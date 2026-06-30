@@ -1049,6 +1049,26 @@ async function batchImportReceipt(payload, primaryFile = null, extraFiles = []) 
   });
 }
 
+async function mergeItems(sourceItemId, targetItemId) {
+  return withTransaction(async (client) => {
+    const sourceItem = await getItem(sourceItemId, client);
+    const targetItem = await getItem(targetItemId, client);
+    if (!sourceItem) {
+      throw new Error(`Item de origem com ID ${sourceItemId} não foi encontrado.`);
+    }
+    if (!targetItem) {
+      throw new Error(`Item de destino com ID ${targetItemId} não foi encontrado.`);
+    }
+    const sourceQty = toNumber(sourceItem.quantity, 0);
+    await query('UPDATE items SET quantity = quantity + $1 WHERE id = $2', [sourceQty, targetItemId], client);
+    await query('UPDATE movements SET "itemId" = $1 WHERE "itemId" = $2', [targetItemId, sourceItemId], client);
+    await query('UPDATE price_history SET "itemId" = $1 WHERE "itemId" = $2', [targetItemId, sourceItemId], client);
+    await query('UPDATE extra_purchases SET "itemId" = $1 WHERE "itemId" = $2', [targetItemId, sourceItemId], client);
+    await query('DELETE FROM items WHERE id = $1', [sourceItemId], client);
+    return await getItem(targetItemId, client);
+  });
+}
+
 module.exports = {
   getAllItems,
   getItem,
@@ -1056,6 +1076,7 @@ module.exports = {
   updateItem,
   deleteItem,
   updateItemQty,
+  mergeItems,
   updateItemConsumption,
   getAllMovements,
   insertMovement,

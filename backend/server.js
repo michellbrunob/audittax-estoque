@@ -1,4 +1,4 @@
-﻿require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const express = require('express');
 const cors = require('cors');
@@ -1139,6 +1139,18 @@ app.delete('/api/items/:id', asyncRoute(async (req, res) => {
 }));
 app.patch('/api/items/:id/consumption', asyncRoute(async (req, res) => {
   try { await Q.updateItemConsumption(Number(req.params.id), Number(req.body.weeklyConsumption)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+app.post('/api/items/merge', asyncRoute(async (req, res) => {
+  const { sourceItemId, targetItemId } = req.body;
+  if (!sourceItemId || !targetItemId) {
+    return res.status(400).json({ error: 'IDs de origem e destino sao obrigatorios.' });
+  }
+  try {
+    const result = await Q.mergeItems(Number(sourceItemId), Number(targetItemId));
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 }));
 
 // â”€â”€â”€ Movements â”€â”€â”€

@@ -65,6 +65,7 @@ const api = {
   addItem: (p) => json('POST', '/api/items', p),
   updateItem: (id, p) => json('PUT', `/api/items/${id}`, p),
   deleteItem: (id) => json('DELETE', `/api/items/${id}`),
+  mergeItems: (sourceItemId, targetItemId) => json('POST', '/api/items/merge', { sourceItemId, targetItemId }),
   updateConsumption: (id, wc) => json('PATCH', `/api/items/${id}/consumption`, { weeklyConsumption: wc }),
 
   registerMovement: (p) => json('POST', '/api/movements', p),

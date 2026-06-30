@@ -1234,6 +1234,7 @@ function App() {
   const deleteItem = (itemId) => {
     apiCall(window.__api.deleteItem(itemId), 'Item excluido.');
   };
+  const mergeItems = (sourceItemId, targetItemId) => apiCall(window.__api.mergeItems(sourceItemId, targetItemId), 'Itens mesclados com sucesso.');
 
   const registerMovement = (payload) => {
     const item = itemsById[payload.itemId];
@@ -1565,7 +1566,7 @@ function App() {
 
         {screen === 'timeline' ? <section className="panel"><div className="panel-head"><div><h3>Linha do tempo cronológica</h3><p>Esgotamentos projetados, reposições avulsas e compra geral</p></div></div><div className="timeline">{state.items.map((item) => ({ id: `item-${item.id}`, date: addDays(todayString(), Number.isFinite(durationForItem(item)) ? durationForItem(item) : 3650).toISOString().split('T')[0], tone: durationForItem(item) <= 7 ? 'danger' : durationForItem(item) <= daysUntilNextPurchase ? 'warn' : 'success', title: `${item.name} deve acabar`, subtitle: `${item.quantity} ${item.unit} em estoque, consumo ${item.weeklyConsumption} ${item.unit}/semana` })).concat(state.extraPurchases.map((entry) => ({ id: `extra-${entry.id}`, date: entry.date, tone: 'info', title: `Reposição avulsa de ${itemsById[entry.itemId]?.name || 'Item removido'}`, subtitle: `${entry.quantity} ${itemsById[entry.itemId]?.unit || ''} em ${suppliersById[entry.supplierId]?.name || entry.location || 'local nao informado'} por ${currency(entry.cost)}` }))).concat([{ id: 'cycle', date: safeIsoDate(nextPurchaseDate), tone: 'neutral', title: 'Próxima compra geral', subtitle: `Ciclo fixo de ${state.cycle.intervalDays} dias` }]).sort((a, b) => new Date(`${a.date}T00:00:00`) - new Date(`${b.date}T00:00:00`)).map((event) => <div className="timeline-item" key={event.id}><span className={`timeline-dot ${event.tone}`}></span><div><span className="mono">{formatDate(event.date)}</span><h4>{event.title}</h4><p>{event.subtitle}</p></div></div>)}</div></section> : null}
 
-        {screen === 'items' ? <ItemsPanel items={state.items} movements={state.movements} priceHistory={state.priceHistory} onAdd={addItem} onUpdate={updateItem} onDelete={deleteItem} /> : null}
+        {screen === 'items' ? <ItemsPanel items={state.items} movements={state.movements} priceHistory={state.priceHistory} onAdd={addItem} onUpdate={updateItem} onDelete={deleteItem} onMerge={mergeItems} /> : null}
         {screen === 'entry' ? <><MovementForm title="Registrar entrada manual" items={state.items} onSubmit={(payload) => registerMovement({ ...payload, type: 'entrada' })} /><ReaderPanel state={reader} items={state.items} suppliers={state.suppliers} onAnalyze={analyzeReceipt} onConfirm={confirmReaderImport} onDraftChange={(draftItems) => setReader((current) => ({ ...current, draftItems }))} onSupplierChange={(supplierId) => setReader((current) => ({ ...current, supplierId }))} onAccessKeyChange={(accessKey) => setReader((current) => ({ ...current, accessKey }))} onAttachmentChange={(file) => { readerAttachmentRef.current = file; setReader((current) => ({ ...current, companionFileName: file?.name || '', companionFileMimeType: file?.type || '' })); }} onAddSupplier={(payload) => { addSupplier(payload); setReader((current) => ({ ...current, _pendingSupplierName: payload.name })); }} onReset={() => { setReader(createEmptyReaderState()); readerFileRef.current = null; readerAttachmentRef.current = null; }} /></> : null}
         {screen === 'output' ? <MovementForm title="Registrar saida" items={state.items} onSubmit={(payload) => registerMovement({ ...payload, type: 'saida' })} /> : null}
         {screen === 'extra' ? <ExtraForm items={state.items} entries={state.extraPurchases} onSubmit={registerExtra} itemsById={itemsById} suppliers={state.suppliers} suppliersById={suppliersById} /> : null}
@@ -1680,13 +1681,17 @@ function ConfirmModal({ title, message, onConfirm, onCancel, confirmLabel = 'Con
   </div></div>;
 }
 
-function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete }) {
+function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete, onMerge }) {
   const emptyForm = { name: '', unit: 'un', quantity: 0, minStock: 1, weeklyConsumption: 0, packUnit: '', packSize: 1, brand: '', itemNotes: '', needsPurchase: false };
   const [addForm, setAddForm] = useState(emptyForm);
   const [editItem, setEditItem] = useState(null);
   const [pendingEditPayload, setPendingEditPayload] = useState(null);
   const [confirmDeleteItem, setConfirmDeleteItem] = useState(null);
   const [itemSearch, setItemSearch] = useState('');
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [mergeSourceId, setMergeSourceId] = useState('');
+  const [mergeTargetId, setMergeTargetId] = useState('');
+  const [isMerging, setIsMerging] = useState(false);
   const handleAdd = (event) => {
     event.preventDefault();
     if (!addForm.name.trim()) return;
@@ -1721,7 +1726,7 @@ function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete 
       </div>
       <div className="actions-row"><button className="primary-button" type="submit">Cadastrar item</button></div>
     </form></section>
-    <section className="panel"><div className="panel-head"><div><h3>Itens cadastrados</h3><p>Lista completa do estoque monitorado</p></div><Badge tone="info">{items.length} item(ns)</Badge></div>
+    <section className="panel"><div className="panel-head"><div><h3>Itens cadastrados</h3><p>Lista completa do estoque monitorado</p></div><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><button className="ghost-button" type="button" onClick={() => setIsMergeModalOpen(true)}>🔄 Mesclar itens</button><Badge tone="info">{items.length} item(ns)</Badge></div></div>
     <div style={{ marginBottom: '12px' }}><input value={itemSearch} onChange={(e) => setItemSearch(e.target.value)} placeholder="Buscar item por nome..." style={{ width: '100%', maxWidth: '400px', padding: '11px 12px', borderRadius: '12px', border: '1px solid var(--line)', background: '#fff' }} /></div>
     <div className="table-wrap"><table><thead><tr><th>Item</th><th>Unidade base</th><th>Quantidade</th><th>Embalagem</th><th>Minimo</th><th>Consumo/sem.</th><th>Acoes</th></tr></thead><tbody>{sortByName(items).filter((item) => !itemSearch || item.name.toLowerCase().includes(itemSearch.toLowerCase())).map((item) => {
       const packSz = Number(item.packSize || 1);
@@ -1758,6 +1763,57 @@ function ItemsPanel({ items, movements, priceHistory, onAdd, onUpdate, onDelete 
     </div></div> : null}
     {pendingEditPayload ? <ConfirmModal title="Confirmar alteracoes" message={`Deseja salvar as alteracoes no item "${pendingEditPayload.name}"?`} confirmLabel="Salvar alteracoes" onConfirm={confirmEdit} onCancel={() => setPendingEditPayload(null)} /> : null}
     {confirmDeleteItem ? <ConfirmModal title="Excluir item" message={`Deseja excluir o item "${confirmDeleteItem.name}"? Esta acao nao pode ser desfeita.`} confirmLabel="Excluir" danger onConfirm={() => { onDelete(confirmDeleteItem.id); setConfirmDeleteItem(null); }} onCancel={() => setConfirmDeleteItem(null)} /> : null}
+    {isMergeModalOpen ? <div className="modal-overlay"><div className="modal-content" style={{ maxWidth: '500px' }}>
+      <div className="panel-head"><div><h3>Mesclar itens duplicados</h3><p>Transfere estoque e histórico do item duplicado para o principal.</p></div></div>
+      <form className="form-grid" onSubmit={async (e) => {
+        e.preventDefault();
+        if (!mergeSourceId || !mergeTargetId) return;
+        if (mergeSourceId === mergeTargetId) {
+          alert('O item de origem e destino nao podem ser o mesmo.');
+          return;
+        }
+        setIsMerging(true);
+        try {
+          await onMerge(Number(mergeSourceId), Number(mergeTargetId));
+          setMergeSourceId('');
+          setMergeTargetId('');
+          setIsMergeModalOpen(false);
+        } catch (err) {
+        } finally {
+          setIsMerging(false);
+        }
+      }}>
+        <Field label="Item duplicado (sera excluido)">
+          <select value={mergeSourceId} onChange={(e) => setMergeSourceId(e.target.value)} required>
+            <option value="">Selecione o item duplicado...</option>
+            {sortByName(items).map((item) => (
+              <option key={item.id} value={item.id}>{item.name} ({item.quantity} {item.unit})</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Item principal (ira receber estoque e historico)">
+          <select value={mergeTargetId} onChange={(e) => setMergeTargetId(e.target.value)} required>
+            <option value="">Selecione o item principal...</option>
+            {sortByName(items).filter(item => String(item.id) !== mergeSourceId).map((item) => (
+              <option key={item.id} value={item.id}>{item.name} ({item.quantity} {item.unit})</option>
+            ))}
+          </select>
+        </Field>
+        <div style={{ gridColumn: 'span 2', background: '#fcf8e3', border: '1px solid #fbeed5', padding: '12px', borderRadius: '8px', color: '#c09853', fontSize: '13px' }}>
+          <strong>Atencao:</strong> Esta acao e definitiva. As movimentacoes, precos historicos e estoque atual serao transferidos para o item principal, e o item duplicado sera excluido.
+        </div>
+        <div className="actions-row">
+          <button className="primary-button" type="submit" disabled={isMerging}>
+            {isMerging ? 'Mesclando...' : 'Confirmar e mesclar'}
+          </button>
+          <button className="ghost-button" type="button" onClick={() => {
+            setIsMergeModalOpen(false);
+            setMergeSourceId('');
+            setMergeTargetId('');
+          }} disabled={isMerging}>Cancelar</button>
+        </div>
+      </form>
+    </div></div> : null}
   </>;
 }
 
